@@ -232,7 +232,7 @@ Item {
             enabled: !root.controller.expanded || !root.controller.activityOwnsBlankClicks
             onClicked: mouse => {
                 if (mouse.button === Qt.MiddleButton) {
-                    Quickshell.execDetached(["/usr/bin/dms", "ipc", "call", "osk", "toggle"]);
+                    Quickshell.execDetached(["dms", "ipc", "call", "osk", "toggle"]);
                     return;
                 }
                 root.controller.requestToggle(true);
