@@ -13,7 +13,10 @@ BasePill {
     id: root
 
     property var widgetData: null
-    property bool compactMode: widgetData?.focusedWindowCompactMode !== undefined ? widgetData.focusedWindowCompactMode : SettingsData.focusedWindowCompactMode
+    property bool showTitle: widgetData?.focusedWindowShowTitle !== undefined ? widgetData.focusedWindowShowTitle : SettingsData.focusedWindowShowTitle
+    property bool showTooltip: widgetData?.focusedWindowShowTooltip !== undefined ? widgetData.focusedWindowShowTooltip : SettingsData.focusedWindowShowTooltip
+    property bool tooltipShowTitle: widgetData?.focusedWindowTooltipShowTitle !== undefined ? widgetData.focusedWindowTooltipShowTitle : SettingsData.focusedWindowTooltipShowTitle
+    property bool compactMode: showTitle && (widgetData?.focusedWindowCompactMode !== undefined ? widgetData.focusedWindowCompactMode : SettingsData.focusedWindowCompactMode)
     property bool showIcon: widgetData?.focusedWindowShowIcon !== undefined ? widgetData.focusedWindowShowIcon : SettingsData.focusedWindowShowIcon
     readonly property int maxWidth: {
         const size = widgetData?.focusedWindowSize !== undefined ? widgetData.focusedWindowSize : SettingsData.focusedWindowSize;
@@ -396,12 +399,14 @@ BasePill {
                         font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale, root.barConfig?.maximizeWidgetText)
                         color: Theme.outlineButton
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: !compactMode && appText.text && titleText.text
+                        visible: root.showTitle && !compactMode && appText.text && titleText.text
                     }
 
                     StyledText {
                         id: titleText
                         text: {
+                            if (!root.showTitle)
+                                return "";
                             const title = activeWindow && activeWindow.title ? activeWindow.title : "";
                             const appName = appText.text;
 
@@ -454,10 +459,10 @@ BasePill {
         y: -root.topMargin
         width: root.width + root.leftMargin + root.rightMargin
         height: root.height + root.topMargin + root.bottomMargin
-        hoverEnabled: root.isVerticalOrientation
+        hoverEnabled: root.isVerticalOrientation && root.showTooltip
         cursorShape: Qt.PointingHandCursor
         onEntered: {
-            if (root.isVerticalOrientation && activeWindow && activeWindow.appId && root.parentScreen) {
+            if (root.isVerticalOrientation && root.showTooltip && activeWindow && activeWindow.appId && root.parentScreen) {
                 tooltipLoader.active = true;
                 if (tooltipLoader.item) {
                     const localPos = mapToItem(null, width / 2, height / 2);
@@ -467,7 +472,7 @@ BasePill {
 
                     const appName = Paths.getAppName(activeWindow.appId, activeDesktopEntry);
                     const title = activeWindow.title || "";
-                    const tooltipText = appName + (title ? " • " + title : "");
+                    const tooltipText = root.tooltipShowTitle ? (appName + (title ? " • " + title : "")) : appName;
 
                     const isLeft = root.axis?.edge === "left";
                     tooltipLoader.item.show(tooltipText, tooltipX, adjustedY, currentScreen, isLeft, !isLeft);
