@@ -7,12 +7,15 @@ StyledRect {
     id: root
 
     property var keyData
+    property string layoutLabel: ""
+    signal cycleLayoutRequested
     readonly property string key: keyData.label ?? ""
     readonly property string keytype: keyData.keytype ?? "normal"
     readonly property int keycode: keyData.keycode ?? 0
     readonly property string shape: keyData.shape ?? "normal"
     readonly property bool isShift: Ydotool.shiftKeys.indexOf(keycode) !== -1
     readonly property bool isCaps: keytype === "caps"
+    readonly property bool isLayout: keytype === "layout"
     readonly property bool isBackspace: key.toLowerCase() === "backspace"
     readonly property bool isEnter: key.toLowerCase() === "enter" || key.toLowerCase() === "return"
     readonly property bool isEmpty: shape === "empty"
@@ -46,6 +49,8 @@ StyledRect {
     implicitWidth: baseWidth * (widthMultiplier[shape] ?? 1)
     implicitHeight: baseHeight * (heightMultiplier[shape] ?? 1)
     Layout.fillWidth: shape === "space" || shape === "expand"
+    Layout.preferredWidth: shape === "space" ? 40 : (isLayout ? 10 : implicitWidth)
+    Layout.horizontalStretchFactor: shape === "space" ? 4 : (isLayout ? 1 : 0)
     enabled: !isEmpty
     radius: Theme.cornerRadius
     color: isEmpty ? "transparent" : (toggled ? Theme.primarySelected : Theme.withAlpha(Theme.surfaceText, 0.08))
@@ -60,12 +65,32 @@ StyledRect {
 
     StyledText {
         anchors.centerIn: parent
-        visible: !root.isBackspace && !root.isEnter
+        visible: !root.isLayout && !root.isBackspace && !root.isEnter
         text: Ydotool.shiftMode === 2 ? (root.keyData.labelCaps ?? root.keyData.labelShift ?? root.key)
             : Ydotool.shiftMode === 1 ? (root.keyData.labelShift ?? root.key)
             : root.key
         font.pixelSize: root.shape === "fn" ? Theme.fontSizeSmall : Theme.fontSizeMedium
         color: root.toggled ? Theme.primary : Theme.surfaceText
+    }
+
+    Row {
+        anchors.centerIn: parent
+        visible: root.isLayout
+        spacing: Theme.spacingXS
+
+        DankIcon {
+            anchors.verticalCenter: parent.verticalCenter
+            name: "language"
+            size: Theme.fontSizeMedium + 4
+            color: Theme.surfaceText
+        }
+
+        StyledText {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.layoutLabel
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceText
+        }
     }
 
     Timer {
@@ -93,6 +118,10 @@ StyledRect {
         anchors.fill: parent
         enabled: !root.isEmpty
         onPressed: {
+            if (root.isLayout) {
+                root.cycleLayoutRequested();
+                return;
+            }
             if (root.isCaps) {
                 if (Ydotool.shiftMode === 2) {
                     Ydotool.releaseShiftKeys();
@@ -108,6 +137,8 @@ StyledRect {
                 Ydotool.shiftMode = 1;
         }
         onReleased: {
+            if (root.isLayout)
+                return;
             if (root.isCaps)
                 return;
             if (root.keytype === "normal") {

@@ -33,20 +33,10 @@ Item {
                     delegate: OskKey {
                         required property var modelData
                         keyData: modelData
+                        layoutLabel: root.currentLayout.name_short ?? ""
+                        onCycleLayoutRequested: root.cycleLayoutRequested()
                     }
                 }
-            }
-        }
-
-        RowLayout {
-            Layout.alignment: Qt.AlignRight
-
-            OskLayoutKey {
-                layoutLabel: {
-                    const layout = root.layouts[root.activeLayoutName];
-                    return layout && layout.name_short ? layout.name_short : root.activeLayoutName;
-                }
-                onClicked: root.cycleLayoutRequested()
             }
         }
     }

@@ -104,10 +104,7 @@ const byName = {
                 // { label: "Super", shape: "normal", keycode: 125 }, // dangerous
                 { keytype: "modkey", label: "Alt", shape: "normal", keycode: 56 },
                 { keytype: "normal", label: "Space", shape: "space", keycode: 57 },
-                { keytype: "modkey", label: "Alt", shape: "normal", keycode: 100 },
-                // { label: "Super", shape: "normal", keycode: 126 }, // dangerous
-                { keytype: "normal", label: "Menu", shape: "normal", keycode: 139 },
-                { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 97 },
+                { keytype: "layout", label: "Lang", shape: "expand" },
                 { keytype: "normal", label: "←", shape: "normal", keycode: 105 },
                 { keytype: "normal", label: "↓", shape: "normal", keycode: 108 },
                 { keytype: "normal", label: "↑", shape: "normal", keycode: 103 },
@@ -304,9 +301,7 @@ const byName = {
                 { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 29 },
                 { keytype: "modkey", label: "Alt", shape: "normal", keycode: 56 },
                 { keytype: "normal", label: "Space", shape: "space", keycode: 57 },
-                { keytype: "modkey", label: "Alt", shape: "normal", keycode: 100 },
-                { keytype: "normal", label: "Menu", shape: "normal", keycode: 139 },
-                { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 97 },
+                { keytype: "layout", label: "Lang", shape: "expand" },
                 { keytype: "normal", label: "←", shape: "normal", keycode: 105 },
                 { keytype: "normal", label: "↓", shape: "normal", keycode: 108 },
                 { keytype: "normal", label: "↑", shape: "normal", keycode: 103 },
