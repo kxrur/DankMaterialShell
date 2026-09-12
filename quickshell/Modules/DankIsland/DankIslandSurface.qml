@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Quickshell
 import qs.Common
 import qs.Modules.DankDash
 import qs.Modules.DankIsland.Activities
@@ -204,9 +205,15 @@ Item {
 
         MouseArea {
             anchors.fill: parent
-            acceptedButtons: Qt.LeftButton
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
             enabled: !root.controller.expanded || !root.controller.activityOwnsBlankClicks
-            onClicked: root.controller.requestToggle(true)
+            onClicked: mouse => {
+                if (mouse.button === Qt.MiddleButton) {
+                    Quickshell.execDetached(["/usr/bin/dms", "ipc", "call", "virtualKeyboard", "toggle"]);
+                    return;
+                }
+                root.controller.requestToggle(true);
+            }
             onWheel: wheel => {
                 if (root.controller.expanded) {
                     wheel.accepted = false;
