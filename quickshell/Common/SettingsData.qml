@@ -522,6 +522,9 @@ Singleton {
     property int focusedWindowSize: 1
     property bool focusedWindowCompactMode: false
     property bool focusedWindowShowIcon: true
+    property bool focusedWindowShowTitle: true
+    property bool focusedWindowShowTooltip: true
+    property bool focusedWindowTooltipShowTitle: true
     property bool runningAppsCompactMode: true
     property int barMaxVisibleApps: 0
     property int barMaxVisibleRunningApps: 0
