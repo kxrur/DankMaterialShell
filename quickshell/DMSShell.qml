@@ -11,6 +11,7 @@ import qs.Modals.Greeter
 import qs.Modals.Settings
 import qs.Modals.DankLauncherV2
 import qs.Modules
+import qs.Modules.Osk
 import qs.Modules.AppDrawer
 import qs.Modules.DankDash
 import qs.Modules.ControlCenter
@@ -61,6 +62,8 @@ Item {
     Lock {
         id: lock
     }
+
+    Osk {}
 
     Variants {
         model: Quickshell.screens
