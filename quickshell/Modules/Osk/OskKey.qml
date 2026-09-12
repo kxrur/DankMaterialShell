@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import qs.Common
 import qs.Widgets
 
@@ -11,12 +12,14 @@ StyledRect {
     readonly property int keycode: keyData.keycode ?? 0
     readonly property string shape: keyData.shape ?? "normal"
     readonly property bool isShift: Ydotool.shiftKeys.indexOf(keycode) !== -1
+    readonly property bool isCaps: keytype === "caps"
     readonly property bool isBackspace: key.toLowerCase() === "backspace"
     readonly property bool isEnter: key.toLowerCase() === "enter" || key.toLowerCase() === "return"
     readonly property bool isEmpty: shape === "empty"
     property bool modToggled: false
-    readonly property bool toggled: isShift ? Ydotool.shiftMode > 0 : (keytype === "modkey" && modToggled)
+    readonly property bool toggled: isShift ? Ydotool.shiftMode > 0 : (isCaps ? Ydotool.shiftMode === 2 : (keytype === "modkey" && modToggled))
 
+    readonly property int shiftKeycode: 42
     readonly property real baseWidth: 45
     readonly property real baseHeight: 45
     readonly property var widthMultiplier: ({
@@ -40,12 +43,12 @@ StyledRect {
         "expand": 1
     })
 
-    width: baseWidth * (widthMultiplier[shape] ?? 1)
-    height: baseHeight * (heightMultiplier[shape] ?? 1)
-    visible: !isEmpty
+    implicitWidth: baseWidth * (widthMultiplier[shape] ?? 1)
+    implicitHeight: baseHeight * (heightMultiplier[shape] ?? 1)
+    Layout.fillWidth: shape === "space" || shape === "expand"
     enabled: !isEmpty
     radius: Theme.cornerRadius
-    color: toggled ? Theme.primarySelected : Theme.withAlpha(Theme.surfaceText, 0.08)
+    color: isEmpty ? "transparent" : (toggled ? Theme.primarySelected : Theme.withAlpha(Theme.surfaceText, 0.08))
 
     DankIcon {
         anchors.centerIn: parent
@@ -90,11 +93,23 @@ StyledRect {
         anchors.fill: parent
         enabled: !root.isEmpty
         onPressed: {
+            if (root.isCaps) {
+                if (Ydotool.shiftMode === 2) {
+                    Ydotool.releaseShiftKeys();
+                } else {
+                    if (Ydotool.shiftMode === 0)
+                        Ydotool.press(root.shiftKeycode);
+                    Ydotool.shiftMode = 2;
+                }
+                return;
+            }
             Ydotool.press(root.keycode);
             if (root.isShift && Ydotool.shiftMode === 0)
                 Ydotool.shiftMode = 1;
         }
         onReleased: {
+            if (root.isCaps)
+                return;
             if (root.keytype === "normal") {
                 Ydotool.release(root.keycode);
                 if (Ydotool.shiftMode === 1)

@@ -71,9 +71,7 @@ const byName = {
                 { keytype: "normal", label: "\\", labelShift: "|", shape: "expand", keycode: 43 }
             ],
             [
-                //{ keytype: "normal", label: "Caps", shape: "caps", keycode: 58 }, // not needed as double-pressing shift does that
-                { keytype: "spacer", label: "", shape: "empty" },
-                { keytype: "spacer", label: "", shape: "empty" },
+                { keytype: "caps", label: "Caps", shape: "caps" },
                 { keytype: "normal", label: "a", labelShift: "A", shape: "normal", keycode: 30 },
                 { keytype: "normal", label: "s", labelShift: "S", shape: "normal", keycode: 31 },
                 { keytype: "normal", label: "d", labelShift: "D", shape: "normal", keycode: 32 },
@@ -109,7 +107,11 @@ const byName = {
                 { keytype: "modkey", label: "Alt", shape: "normal", keycode: 100 },
                 // { label: "Super", shape: "normal", keycode: 126 }, // dangerous
                 { keytype: "normal", label: "Menu", shape: "normal", keycode: 139 },
-                { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 97 }
+                { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 97 },
+                { keytype: "normal", label: "←", shape: "normal", keycode: 105 },
+                { keytype: "normal", label: "↓", shape: "normal", keycode: 108 },
+                { keytype: "normal", label: "↑", shape: "normal", keycode: 103 },
+                { keytype: "normal", label: "→", shape: "normal", keycode: 106 }
             ]
         ]
     },
@@ -270,8 +272,7 @@ const byName = {
                 { keytype: "normal", label: "\\", labelShift: "/", shape: "expand", keycode: 43 }
             ],
             [
-                { keytype: "spacer", label: "", shape: "empty" },
-                { keytype: "spacer", label: "", shape: "empty" },
+                { keytype: "caps", label: "Caps", shape: "caps" },
                 { keytype: "normal", label: "ф", labelShift: "Ф", shape: "normal", keycode: 30 },
                 { keytype: "normal", label: "ы", labelShift: "Ы", shape: "normal", keycode: 31 },
                 { keytype: "normal", label: "в", labelShift: "В", shape: "normal", keycode: 32 },
@@ -305,7 +306,11 @@ const byName = {
                 { keytype: "normal", label: "Space", shape: "space", keycode: 57 },
                 { keytype: "modkey", label: "Alt", shape: "normal", keycode: 100 },
                 { keytype: "normal", label: "Menu", shape: "normal", keycode: 139 },
-                { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 97 }
+                { keytype: "modkey", label: "Ctrl", shape: "control", keycode: 97 },
+                { keytype: "normal", label: "←", shape: "normal", keycode: 105 },
+                { keytype: "normal", label: "↓", shape: "normal", keycode: 108 },
+                { keytype: "normal", label: "↑", shape: "normal", keycode: 103 },
+                { keytype: "normal", label: "→", shape: "normal", keycode: 106 }
             ]
         ]
     }

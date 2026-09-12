@@ -53,7 +53,7 @@ Scope {
             implicitHeight: card.implicitHeight + Theme.spacingL * 2
             WlrLayershell.namespace: "dms:osk"
             WlrLayershell.layer: WlrLayer.Overlay
-            WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
             mask: Region {
                 item: card
             }
@@ -67,25 +67,19 @@ Scope {
                 blurRadius: Theme.cornerRadius
             }
 
-            FocusScope {
-                anchors.fill: parent
-                focus: window.visible
-                Keys.onEscapePressed: root.hide()
+            StyledRect {
+                id: card
+                anchors.centerIn: parent
+                color: Theme.surfaceContainer
+                radius: Theme.cornerRadius
+                implicitWidth: oskContent.implicitWidth + Theme.spacingM * 2
+                implicitHeight: oskContent.implicitHeight + Theme.spacingM * 2
 
-                StyledRect {
-                    id: card
+                OskContent {
+                    id: oskContent
                     anchors.centerIn: parent
-                    color: Theme.surfaceContainer
-                    radius: Theme.cornerRadius
-                    implicitWidth: oskContent.implicitWidth + Theme.spacingM * 2
-                    implicitHeight: oskContent.implicitHeight + Theme.spacingM * 2
-
-                    OskContent {
-                        id: oskContent
-                        anchors.centerIn: parent
-                        layoutName: root.layout
-                        onCycleLayoutRequested: root.cycleLayout()
-                    }
+                    layoutName: root.layout
+                    onCycleLayoutRequested: root.cycleLayout()
                 }
             }
         }
