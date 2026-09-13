@@ -11,15 +11,22 @@ Scope {
     id: root
 
     property bool oskOpen: false
+    property bool movieMode: false
     property string fallbackLayout: "English (US)"
     readonly property string niriLayout: NiriService.getCurrentKeyboardLayoutName()
     readonly property string layout: niriLayout !== "" && Layouts.byName.hasOwnProperty(niriLayout) ? niriLayout : fallbackLayout
 
     function toggle() {
-        oskOpen = !oskOpen;
+        if (oskOpen) {
+            hide();
+            return;
+        }
+        movieMode = false;
+        oskOpen = true;
     }
 
     function show() {
+        movieMode = false;
         oskOpen = true;
     }
 
@@ -27,9 +34,22 @@ Scope {
         oskOpen = false;
     }
 
+    function toggleMovie() {
+        if (oskOpen && movieMode) {
+            hide();
+            return;
+        }
+        movieMode = true;
+        oskOpen = true;
+    }
+
     function cycleLayout() {
+        if (movieMode)
+            return;
         NiriService.cycleKeyboardLayout();
     }
+
+    onMovieModeChanged: Ydotool.releaseAllKeys()
 
     Loader {
         id: oskLoader
@@ -46,7 +66,8 @@ Scope {
             color: "transparent"
             anchors {
                 top: true
-                right: true
+                right: !root.movieMode
+                left: root.movieMode
             }
             exclusiveZone: 0
             implicitWidth: card.implicitWidth + Theme.spacingL * 2
@@ -72,14 +93,28 @@ Scope {
                 anchors.centerIn: parent
                 color: Theme.surfaceContainer
                 radius: Theme.cornerRadius
-                implicitWidth: oskContent.implicitWidth + Theme.spacingM * 2
-                implicitHeight: oskContent.implicitHeight + Theme.spacingM * 2
+                implicitWidth: contentLoader.implicitWidth + Theme.spacingM * 2
+                implicitHeight: contentLoader.implicitHeight + Theme.spacingM * 2
 
-                OskContent {
-                    id: oskContent
+                Loader {
+                    id: contentLoader
                     anchors.centerIn: parent
-                    layoutName: root.layout
-                    onCycleLayoutRequested: root.cycleLayout()
+                    sourceComponent: root.movieMode ? movieContent : keyboardContent
+                }
+
+                Component {
+                    id: keyboardContent
+
+                    OskContent {
+                        layoutName: root.layout
+                        onCycleLayoutRequested: root.cycleLayout()
+                    }
+                }
+
+                Component {
+                    id: movieContent
+
+                    MovieContent {}
                 }
             }
         }
@@ -102,6 +137,19 @@ Scope {
 
         function cycleLayout(): void {
             root.cycleLayout();
+        }
+
+        function movie(): void {
+            root.toggleMovie();
+        }
+
+        function movieOpen(): void {
+            root.movieMode = true;
+            root.oskOpen = true;
+        }
+
+        function movieClose(): void {
+            root.hide();
         }
     }
 }

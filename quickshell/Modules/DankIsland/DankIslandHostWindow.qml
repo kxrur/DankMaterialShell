@@ -405,6 +405,21 @@ PanelWindow {
     }
 
     MouseArea {
+        id: leadingAreaClick
+
+        readonly property real islandStart: root.isVertical ? surface.currentVisualY : surface.currentVisualX
+
+        x: root.isVertical ? root.stripPos : 0
+        y: root.isVertical ? 0 : root.stripPos
+        width: root.isVertical ? root.reservedStripThickness : Math.max(0, islandStart)
+        height: root.isVertical ? Math.max(0, islandStart) : root.reservedStripThickness
+        z: -0.5
+        acceptedButtons: Qt.RightButton
+        enabled: !controller.inputSuspended && !root.satelliteSurfacesOpen
+        onClicked: Quickshell.execDetached(["dms", "ipc", "call", "osk", "movie"])
+    }
+
+    MouseArea {
         id: trailingAreaClick
 
         readonly property real islandEnd: (root.isVertical ? surface.currentVisualY : surface.currentVisualX) + (root.isVertical ? surface.currentVisualHeight : surface.currentVisualWidth)
