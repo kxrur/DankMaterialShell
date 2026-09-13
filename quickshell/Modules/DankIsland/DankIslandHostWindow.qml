@@ -55,6 +55,96 @@ PanelWindow {
         return SettingsData.islandSetting(root.barConfig, key);
     }
 
+    property real volumeScrollAccumulator: 0
+    property real brightnessScrollAccumulator: 0
+
+    function islandSideAt(along) {
+        const islandStart = root.isVertical ? surface.currentVisualY : surface.currentVisualX;
+        const islandEnd = islandStart + (root.isVertical ? surface.currentVisualHeight : surface.currentVisualWidth);
+        if (along < islandStart)
+            return "brightness";
+        if (along >= islandEnd)
+            return "volume";
+        return "";
+    }
+
+    function handleStripWheel(wheel) {
+        const deltaX = wheel.angleDelta.x;
+        const deltaY = wheel.angleDelta.y;
+        if (deltaY === 0 || Math.abs(deltaX) > Math.abs(deltaY))
+            return false;
+
+        const along = root.isVertical ? scrollStrip.y + wheel.y : scrollStrip.x + wheel.x;
+        const side = root.islandSideAt(along);
+        if (!side)
+            return false;
+
+        root.applyWheelStep(side, deltaY);
+        return true;
+    }
+
+    function handleDismissWheel(wheel) {
+        const localX = wheel.x - root.hostOriginX;
+        const localY = wheel.y - root.hostOriginY;
+        const cross = root.isVertical ? localX : localY;
+        const inStrip = cross >= root.stripPos && cross < root.stripPos + root.reservedStripThickness;
+        const deltaX = wheel.angleDelta.x;
+        const deltaY = wheel.angleDelta.y;
+        if (inStrip && deltaY !== 0 && Math.abs(deltaX) <= Math.abs(deltaY)) {
+            const side = root.islandSideAt(root.isVertical ? localY : localX);
+            if (side) {
+                root.applyWheelStep(side, deltaY);
+                return;
+            }
+        }
+        scrollStrip.processWheel(wheel);
+    }
+
+    function applyWheelStep(action, deltaY) {
+        const isMouseWheel = Math.abs(deltaY) >= 120 && (Math.abs(deltaY) % 120) === 0;
+        if (isMouseWheel) {
+            root.applyIslandWheelAction(action, deltaY > 0 ? 1 : -1, action === "volume" ? AudioService.wheelVolumeStep : 5);
+            return;
+        }
+
+        const isVolume = action === "volume";
+        const accumulated = (isVolume ? root.volumeScrollAccumulator : root.brightnessScrollAccumulator) + deltaY;
+        if (Math.abs(accumulated) < 100) {
+            if (isVolume)
+                root.volumeScrollAccumulator = accumulated;
+            else
+                root.brightnessScrollAccumulator = accumulated;
+            return;
+        }
+        if (isVolume)
+            root.volumeScrollAccumulator = 0;
+        else
+            root.brightnessScrollAccumulator = 0;
+        root.applyIslandWheelAction(action, accumulated > 0 ? 1 : -1, 1);
+    }
+
+    function applyIslandWheelAction(action, direction, step) {
+        if (action === "volume") {
+            if (!AudioService.sink?.audio)
+                return;
+            AudioService.adjustDefaultSinkVolume(step, direction);
+            AudioService.playVolumeChangeSoundIfEnabled();
+            return;
+        }
+
+        if (!DisplayService.brightnessAvailable)
+            return;
+
+        const deviceName = DisplayService.getPreferredDevice();
+        if (!deviceName)
+            return;
+
+        const deviceInfo = DisplayService.getCurrentDeviceInfoByName(deviceName);
+        const current = DisplayService.getDeviceBrightness(deviceName);
+        const next = Math.max(DisplayService.brightnessMinimum(deviceInfo), Math.min(DisplayService.brightnessMaximum(deviceInfo), current + direction * step));
+        DisplayService.setBrightness(next, deviceName);
+    }
+
     readonly property int reserveThickness: Math.max(24, Math.min(128, root.setting("islandReserveThickness")))
     readonly property int compactThickness: Math.max(24, Math.min(72, root.setting("islandCompactThickness")))
     readonly property bool floating: root.setting("islandFloating")
@@ -273,6 +363,7 @@ PanelWindow {
         xBehavior: satelliteHost.scrollXBehavior
         yBehavior: satelliteHost.scrollYBehavior
         screenName: root.screen?.name ?? ""
+        wheelFilter: wheel => root.handleStripWheel(wheel)
         onWorkspaceSwitchRequested: direction => satelliteHost.switchWorkspace(direction)
     }
 
@@ -311,6 +402,21 @@ PanelWindow {
         islandSurface: surface
         outerGap: root.outerGap
         hyprlandOverviewLoader: root.hyprlandOverviewLoader
+    }
+
+    MouseArea {
+        id: trailingAreaClick
+
+        readonly property real islandEnd: (root.isVertical ? surface.currentVisualY : surface.currentVisualX) + (root.isVertical ? surface.currentVisualHeight : surface.currentVisualWidth)
+
+        x: root.isVertical ? root.stripPos : islandEnd
+        y: root.isVertical ? islandEnd : root.stripPos
+        width: root.isVertical ? root.reservedStripThickness : Math.max(0, root.width - islandEnd)
+        height: root.isVertical ? Math.max(0, root.height - islandEnd) : root.reservedStripThickness
+        z: -0.5
+        acceptedButtons: Qt.RightButton
+        enabled: !controller.inputSuspended && !root.satelliteSurfacesOpen
+        onClicked: MprisController.next()
     }
 
     FocusScope {
@@ -419,7 +525,7 @@ PanelWindow {
                 mouse.accepted = true;
             }
 
-            onWheel: wheel => scrollStrip.processWheel(wheel)
+            onWheel: wheel => root.handleDismissWheel(wheel)
         }
     }
 }

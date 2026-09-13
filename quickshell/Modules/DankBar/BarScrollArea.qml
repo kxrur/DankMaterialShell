@@ -11,6 +11,7 @@ MouseArea {
     property string xBehavior: "column"
     property string yBehavior: "workspace"
     property string screenName: ""
+    property var wheelFilter: null
     property real touchpadAccumulatorX: 0
     property real touchpadAccumulatorY: 0
     property real mouseAccumulatorX: 0
@@ -105,5 +106,9 @@ MouseArea {
         accumulateY(isTouchpadY, deltaY, yBehavior);
     }
 
-    onWheel: wheel => processWheel(wheel)
+    onWheel: wheel => {
+        if (root.wheelFilter && root.wheelFilter(wheel))
+            return;
+        processWheel(wheel);
+    }
 }
