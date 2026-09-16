@@ -197,6 +197,7 @@ var SPEC = {
     workspaceFollowFocus: { def: false },
     showOccupiedWorkspacesOnly: { def: false },
     reverseScrolling: { def: false },
+    workspaceSwitcherScrollColumns: { def: false },
     dwlShowAllTags: { def: false },
     workspaceActiveAppHighlightEnabled: { def: false },
     workspaceColorMode: { def: "default" },
