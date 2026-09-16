@@ -720,6 +720,18 @@ Item {
         return closestIdx;
     }
 
+    function performScrollAction(direction) {
+        if (SettingsData.workspaceSwitcherScrollColumns && CompositorService.isNiri) {
+            const output = root.parentScreen?.name ?? root.screenName;
+            if (direction > 0)
+                NiriService.moveColumnRight(output);
+            else
+                NiriService.moveColumnLeft(output);
+            return;
+        }
+        root.switchWorkspace(direction);
+    }
+
     function switchWorkspace(direction) {
         if (useAqueous) {
             const workspaces = getRealWorkspaces();
@@ -1000,7 +1012,7 @@ Item {
                 if (Math.abs(touchpadAccumulator) < 500)
                     return;
                 const direction = touchpadAccumulator * reverse < 0 ? 1 : -1;
-                root.switchWorkspace(direction);
+                root.performScrollAction(direction);
                 scrollInProgress = true;
                 scrollCooldown.restart();
                 touchpadAccumulator = 0;
@@ -1011,7 +1023,7 @@ Item {
             if (Math.abs(mouseAccumulator) < 120)
                 return;
             const direction = mouseAccumulator * reverse < 0 ? 1 : -1;
-            root.switchWorkspace(direction);
+            root.performScrollAction(direction);
             scrollInProgress = true;
             scrollCooldown.restart();
             mouseAccumulator = 0;
