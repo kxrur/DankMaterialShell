@@ -209,7 +209,7 @@ Item {
         if (!DisplayService.brightnessAvailable)
             return;
 
-        const deviceName = DisplayService.getPreferredDevice();
+        const deviceName = BrightnessService.getPreferredDevice();
         if (!deviceName)
             return;
 
