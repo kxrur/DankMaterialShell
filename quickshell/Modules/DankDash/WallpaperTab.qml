@@ -1,11 +1,14 @@
 import Qt.labs.folderlistmodel
-import QtCore
 import QtQuick
 import Quickshell
 import Quickshell.Widgets
 import qs.Common
 import qs.Modals.FileBrowser
+import qs.DankCommon.FileBrowser as FB
 import qs.Widgets
+import qs.Modules.ControlCenter.Widgets
+import qs.Modules.DankDash
+import "../../DankCommon/Common/FocusNavigation.js" as FocusNavigation
 
 Item {
     id: root
@@ -13,36 +16,47 @@ Item {
     LayoutMirroring.enabled: I18n.isRtl
     LayoutMirroring.childrenInherit: true
 
-    implicitWidth: SettingsData.showWeekNumber ? 736 : 700
-    implicitHeight: 410
+    implicitWidth: DashMetrics.contentWidthFor(SettingsData.showWeekNumber, DashMetrics.panelColumnsFor(entryId))
+    implicitHeight: DashMetrics.tabMinHeight
 
     property string wallpaperDir: ""
     readonly property string searchQuery: wallpaperSearchField.text
     property var filteredWallpaperPaths: []
     property int currentPage: 0
-    property int itemsPerPage: 16
+    property string entryId: "wallpaper"
+    readonly property var options: DashRegistry.resolvedOptions(entryId)
+    readonly property bool carousel: options.layout === "carousel"
+    readonly property int columns: Math.max(DashMetrics.wallpaperColumnsMin, Math.min(DashMetrics.wallpaperColumnsMax, Number(options.columns) || DashMetrics.wallpaperColumnsMin))
+    readonly property int rows: Math.max(DashMetrics.wallpaperRowsMin, Math.min(DashMetrics.wallpaperRowsMax, Number(options.rows) || DashMetrics.wallpaperRowsMin))
+    readonly property int itemsPerPage: columns * rows
+    readonly property int flatIndex: currentPage * itemsPerPage + gridIndex
     readonly property int wallpaperCount: filteredWallpaperPaths.length
     property int totalPages: Math.max(1, Math.ceil(wallpaperCount / itemsPerPage))
     property bool active: false
     property bool searchExpanded: false
-    property Item focusTarget: searchExpanded ? wallpaperSearchField : searchToggleButton
-    property Item tabBarItem: null
+    readonly property Item focusTarget: wallpaperView
+    readonly property var focusTargets: [wallpaperView, previousPageButton, pageButton, nextPageButton, sortButton, folderButton, searchExpanded ? wallpaperSearchField : searchToggleButton, collapseSearchButton]
+    readonly property Item previousFocusTarget: searchExpanded ? collapseSearchButton : searchToggleButton
+    readonly property bool blocksTabNavigation: sortMenu.menuVisible || pageJumpPopup.visible || !!wallpaperBrowserLoader.item?.shouldBeVisible
     property int gridIndex: 0
     property Item keyForwardTarget: null
     property var parentPopout: null
+    property var transientSurfaceTracker: null
     property bool enableAnimation: false
-    property string homeDir: StandardPaths.writableLocation(StandardPaths.HomeLocation)
     property string selectedFileName: ""
     property var targetScreen: null
     property string targetScreenName: targetScreen ? targetScreen.name : ""
-    // Shared with the wallpaper FileBrowser via CacheData.fileBrowserSettings["wallpaper"]
-    property string sortBy: "name"
-    property bool sortAscending: true
-    // Forces the page grid to rebuild when the folder model reorders in place.
+    readonly property var wallpaperBrowserSettings: FB.FileBrowserSettings.load("wallpaper")
+    readonly property string sortKey: wallpaperBrowserSettings.sortKey
+    readonly property bool sortDescending: wallpaperBrowserSettings.sortDesc
+    readonly property var sortKeys: ["name", "size", "mtime", "type"]
+    readonly property var sortOptions: [I18n.tr("Name"), I18n.tr("Size"), I18n.tr("Modified"), I18n.tr("Type")]
     property int gridRevision: 0
     property int pagerCachePages: 1
 
-    signal requestTabChange(int newIndex)
+    function cycleFocus(backwards) {
+        return FocusNavigation.moveFocus(focusTargets, backwards);
+    }
 
     function refreshAfterSort() {
         // Defer until FolderListModel finishes reordering.
@@ -137,6 +151,11 @@ Item {
         }
     }
 
+    function openFolderBrowser() {
+        wallpaperBrowserLoader.active = true;
+        wallpaperBrowserLoader.item.open();
+    }
+
     function focusSearch() {
         searchExpanded = true;
         Qt.callLater(() => {
@@ -156,36 +175,24 @@ Item {
             keyForwardTarget.forceActiveFocus();
     }
 
-    onSortByChanged: refreshAfterSort()
-    onSortAscendingChanged: refreshAfterSort()
+    onSortKeyChanged: refreshAfterSort()
+    onSortDescendingChanged: refreshAfterSort()
     onSearchQueryChanged: {
         currentPage = 0;
         gridIndex = 0;
         searchDebounce.restart();
     }
 
-    function loadSort() {
-        const s = CacheData.fileBrowserSettings["wallpaper"];
-        if (s) {
-            sortBy = s.sortBy || "name";
-            sortAscending = s.sortAscending !== undefined ? s.sortAscending : true;
-        }
-    }
-
-    function persistSort() {
-        let settings = CacheData.fileBrowserSettings;
-        if (!settings["wallpaper"])
-            settings["wallpaper"] = {};
-        settings["wallpaper"].sortBy = sortBy;
-        settings["wallpaper"].sortAscending = sortAscending;
-        CacheData.fileBrowserSettings = settings;
-        CacheData.saveCache();
+    function setSort(key, descending) {
+        FB.FileBrowserSettings.save("wallpaper", {
+            "sortKey": key,
+            "sortDesc": descending
+        });
     }
 
     function getCurrentWallpaper() {
-        if (SessionData.perMonitorWallpaper && targetScreenName) {
+        if (SessionData.perMonitorWallpaper && targetScreenName)
             return SessionData.getMonitorWallpaper(targetScreenName);
-        }
         return SessionData.wallpaperPath;
     }
 
@@ -193,47 +200,41 @@ Item {
         if (SessionData.perMonitorWallpaper && targetScreenName) {
             SessionData.setMonitorWallpaper(targetScreenName, path);
             SessionData.setMonitorCyclingFolderPath(targetScreenName, "");
-        } else {
-            SessionData.setWallpaper(path);
-            SessionData.wallpaperCyclingFolderPath = "";
-            SessionData.saveSettings();
+            return;
         }
+        SessionData.setWallpaper(path);
+        SessionData.wallpaperCyclingFolderPath = "";
+        SessionData.saveSettings();
     }
 
     onCurrentPageChanged: updateSelectedFileName()
 
     onTotalPagesChanged: {
-        if (currentPage >= totalPages) {
+        if (currentPage >= totalPages)
             currentPage = Math.max(0, totalPages - 1);
-        }
     }
 
-    onGridIndexChanged: {
-        updateSelectedFileName();
+    onGridIndexChanged: updateSelectedFileName()
+
+    onItemsPerPageChanged: reselectCurrent()
+
+    function selectFlat(index) {
+        if (index < 0 || index >= wallpaperCount)
+            return;
+        currentPage = Math.floor(index / itemsPerPage);
+        gridIndex = index % itemsPerPage;
     }
 
     onVisibleChanged: {
-        if (visible && active) {
+        if (visible && active)
             setInitialSelection();
-        }
     }
 
-    Component.onCompleted: {
-        loadSort();
-        loadWallpaperDirectory();
-    }
-
-    Connections {
-        target: CacheData
-        function onFileBrowserSettingsChanged() {
-            loadSort();
-        }
-    }
+    Component.onCompleted: loadWallpaperDirectory()
 
     onActiveChanged: {
-        if (active && visible) {
+        if (active && visible)
             setInitialSelection();
-        }
     }
 
     function goToNextCell(visibleCount) {
@@ -253,22 +254,37 @@ Item {
             gridIndex--;
         } else if (currentPage > 0) {
             currentPage--;
-            const prevPageCount = pageItemCount(currentPage);
-            gridIndex = prevPageCount - 1;
+            gridIndex = pageItemCount(currentPage) - 1;
         } else if (totalPages > 1) {
             currentPage = totalPages - 1;
-            const lastPageCount = pageItemCount(currentPage);
-            gridIndex = lastPageCount - 1;
+            gridIndex = pageItemCount(currentPage) - 1;
         }
     }
 
     function closeOverlays() {
-        if (sortMenu.visible || pageJumpPopup.visible) {
-            sortMenu.visible = false;
+        if (sortMenu.menuVisible || pageJumpPopup.visible) {
+            sortMenu.closeDropdownMenu();
             pageJumpPopup.visible = false;
             return true;
         }
         return false;
+    }
+
+    function openSortMenu() {
+        const index = Math.max(0, sortKeys.indexOf(sortKey));
+        sortMenu.currentValue = sortOptions[index];
+        sortMenu.openDropdownMenu();
+    }
+
+    function chooseSort(value) {
+        const index = sortMenu.options.indexOf(value);
+        if (index < 0)
+            return;
+        if (index < sortKeys.length) {
+            setSort(sortKeys[index], sortDescending);
+            return;
+        }
+        setSort(sortKey, index === sortKeys.length + 1);
     }
 
     function handleKeyEvent(event) {
@@ -291,38 +307,41 @@ Item {
             focusSearch();
             return true;
         }
-        const columns = 4;
         const currentCol = gridIndex % columns;
         const visibleCount = pageItemCount(currentPage);
 
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (gridIndex >= 0 && gridIndex < visibleCount) {
-                const absoluteIndex = currentPage * itemsPerPage + gridIndex;
-                if (absoluteIndex < wallpaperCount) {
-                    const filePath = wallpaperPathAt(absoluteIndex);
-                    if (filePath) {
-                        setCurrentWallpaper(filePath);
-                    }
-                }
+                const filePath = wallpaperPathAt(currentPage * itemsPerPage + gridIndex);
+                if (filePath)
+                    setCurrentWallpaper(filePath);
             }
             return true;
         }
 
         if (event.key === Qt.Key_Right || event.key === Qt.Key_L) {
-            if (I18n.isRtl) {
+            if (I18n.isRtl)
                 goToPrevCell();
-            } else {
+            else
                 goToNextCell(visibleCount);
-            }
             return true;
         }
 
         if (event.key === Qt.Key_Left || event.key === Qt.Key_H) {
-            if (I18n.isRtl) {
+            if (I18n.isRtl)
                 goToNextCell(visibleCount);
-            } else {
+            else
                 goToPrevCell();
-            }
+            return true;
+        }
+
+        if (root.carousel && (event.key === Qt.Key_Down || event.key === Qt.Key_J || event.key === Qt.Key_PageDown)) {
+            goToNextCell(visibleCount);
+            return true;
+        }
+
+        if (root.carousel && (event.key === Qt.Key_Up || event.key === Qt.Key_K || event.key === Qt.Key_PageUp)) {
+            goToPrevCell();
             return true;
         }
 
@@ -346,14 +365,12 @@ Item {
                 currentPage--;
                 const prevPageCount = pageItemCount(currentPage);
                 const prevPageRows = Math.ceil(prevPageCount / columns);
-                gridIndex = (prevPageRows - 1) * columns + currentCol;
-                gridIndex = Math.min(gridIndex, prevPageCount - 1);
+                gridIndex = Math.min((prevPageRows - 1) * columns + currentCol, prevPageCount - 1);
             } else if (totalPages > 1) {
                 currentPage = totalPages - 1;
                 const lastPageCount = pageItemCount(currentPage);
                 const lastPageRows = Math.ceil(lastPageCount / columns);
-                gridIndex = (lastPageRows - 1) * columns + currentCol;
-                gridIndex = Math.min(gridIndex, lastPageCount - 1);
+                gridIndex = Math.min((lastPageRows - 1) * columns + currentCol, lastPageCount - 1);
             }
             return true;
         }
@@ -378,8 +395,7 @@ Item {
 
         if (event.key === Qt.Key_End && event.modifiers & Qt.ControlModifier) {
             currentPage = totalPages - 1;
-            const lastPageCount = pageItemCount(currentPage);
-            gridIndex = Math.max(0, lastPageCount - 1);
+            gridIndex = Math.max(0, pageItemCount(currentPage) - 1);
             return true;
         }
 
@@ -387,33 +403,20 @@ Item {
     }
 
     function setInitialSelection() {
-        enableAnimation = false;
         const currentWallpaper = getCurrentWallpaper();
-        if (!currentWallpaper || wallpaperCount === 0) {
-            gridIndex = 0;
-            updateSelectedFileName();
-            Qt.callLater(() => {
-                enableAnimation = true;
-            });
+        let index = -1;
+        if (currentWallpaper && wallpaperCount > 0)
+            index = filteredWallpaperPaths.indexOf(currentWallpaper);
+        const page = index >= 0 ? Math.floor(index / itemsPerPage) : currentPage;
+        const cell = index >= 0 ? index % itemsPerPage : 0;
+        updateSelectedFileName();
+        if (page === currentPage && cell === gridIndex) {
+            enableAnimation = true;
             return;
         }
-
-        for (var i = 0; i < wallpaperCount; i++) {
-            const filePath = wallpaperPathAt(i);
-            if (filePath === currentWallpaper) {
-                const targetPage = Math.floor(i / itemsPerPage);
-                const targetIndex = i % itemsPerPage;
-                currentPage = targetPage;
-                gridIndex = targetIndex;
-                updateSelectedFileName();
-                Qt.callLater(() => {
-                    enableAnimation = true;
-                });
-                return;
-            }
-        }
-        gridIndex = 0;
-        updateSelectedFileName();
+        enableAnimation = false;
+        currentPage = page;
+        gridIndex = cell;
         Qt.callLater(() => {
             enableAnimation = true;
         });
@@ -423,11 +426,7 @@ Item {
         const currentWallpaper = getCurrentWallpaper();
 
         if (!currentWallpaper || currentWallpaper.startsWith("#")) {
-            if (CacheData.wallpaperLastPath && CacheData.wallpaperLastPath !== "") {
-                wallpaperDir = CacheData.wallpaperLastPath;
-            } else {
-                wallpaperDir = "";
-            }
+            wallpaperDir = wallpaperBrowserSettings.lastPath;
             return;
         }
 
@@ -435,66 +434,30 @@ Item {
     }
 
     function updateSelectedFileName() {
-        if (wallpaperCount === 0) {
-            selectedFileName = "";
-            return;
-        }
-
-        const absoluteIndex = currentPage * itemsPerPage + gridIndex;
-        if (absoluteIndex < wallpaperCount) {
-            const filePath = wallpaperPathAt(absoluteIndex);
-            if (filePath) {
-                selectedFileName = filePath.substring(filePath.lastIndexOf('/') + 1);
-                return;
-            }
-        }
-        selectedFileName = "";
+        const filePath = wallpaperCount > 0 ? wallpaperPathAt(currentPage * itemsPerPage + gridIndex) : "";
+        selectedFileName = filePath ? filePath.substring(filePath.lastIndexOf('/') + 1) : "";
     }
 
-    Connections {
-        target: SessionData
-        function onWallpaperPathChanged() {
-            loadWallpaperDirectory();
-            if (visible && active) {
-                setInitialSelection();
-            }
-        }
-        function onMonitorWallpapersChanged() {
-            loadWallpaperDirectory();
-            if (visible && active) {
-                setInitialSelection();
-            }
-        }
-        function onPerMonitorWallpaperChanged() {
-            loadWallpaperDirectory();
-            if (visible && active) {
-                setInitialSelection();
-            }
-        }
-    }
-
-    onTargetScreenNameChanged: {
+    function reselectCurrent() {
         loadWallpaperDirectory();
-        if (visible && active) {
+        if (visible && active)
             setInitialSelection();
-        }
     }
 
-    Connections {
-        target: wallpaperFolderModel
-        function onCountChanged() {
-            if (wallpaperFolderModel.status === FolderListModel.Ready)
-                rebuildWallpaperList(true);
-        }
-        function onStatusChanged() {
-            rebuildWallpaperList(wallpaperFolderModel.status === FolderListModel.Ready);
-        }
-    }
+    readonly property string sessionWallpaperPath: SessionData.wallpaperPath
+    readonly property var sessionMonitorWallpapers: SessionData.monitorWallpapers
+    readonly property bool sessionPerMonitorWallpaper: SessionData.perMonitorWallpaper
+
+    onSessionWallpaperPathChanged: reselectCurrent()
+    onSessionMonitorWallpapersChanged: reselectCurrent()
+    onSessionPerMonitorWallpaperChanged: reselectCurrent()
+
+    onTargetScreenNameChanged: reselectCurrent()
 
     Timer {
         id: searchDebounce
 
-        interval: 60
+        interval: DashMetrics.searchDebounce
         repeat: false
         onTriggered: root.rebuildWallpaperList(false)
     }
@@ -502,18 +465,24 @@ Item {
     FolderListModel {
         id: wallpaperFolderModel
 
+        onCountChanged: {
+            if (status === FolderListModel.Ready)
+                root.rebuildWallpaperList(true);
+        }
+        onStatusChanged: root.rebuildWallpaperList(status === FolderListModel.Ready)
+
         showDirsFirst: false
         showDotAndDotDot: false
         showHidden: false
         caseSensitive: false
-        nameFilters: ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp", "*.jxl", "*.avif", "*.heif", "*.exr"]
+        nameFilters: ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp", "*.jxl", "*.avif", "*.heif", "*.exr", "*.svg"]
         showFiles: true
         showDirs: false
         sortField: {
-            switch (root.sortBy) {
+            switch (root.sortKey) {
             case "size":
                 return FolderListModel.Size;
-            case "modified":
+            case "mtime":
                 return FolderListModel.Time;
             case "type":
                 return FolderListModel.Type;
@@ -521,7 +490,7 @@ Item {
                 return FolderListModel.Name;
             }
         }
-        sortReversed: !root.sortAscending
+        sortReversed: root.sortDescending
         folder: wallpaperDir ? "file://" + wallpaperDir.split('/').map(s => encodeURIComponent(s)).join('/') : ""
     }
 
@@ -554,23 +523,13 @@ Item {
 
         sourceComponent: FileBrowserSurfaceModal {
             browserTitle: I18n.tr("Select Wallpaper Directory", "wallpaper directory file browser title")
-            browserIcon: "folder_open"
-            browserType: "wallpaper"
-            showHiddenFiles: false
-            fileExtensions: ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp", "*.jxl", "*.avif", "*.heif", "*.exr"]
+            bucket: "wallpaper"
+            startPath: root.getCurrentWallpaper()
+            filters: ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.webp", "*.jxl", "*.avif", "*.heif", "*.exr", "*.svg"]
             parentPopout: root.parentPopout
-
-            onFileSelected: path => {
-                const cleanPath = path.replace(/^file:\/\//, '');
-                root.setCurrentWallpaper(cleanPath);
-
-                const dirPath = cleanPath.substring(0, cleanPath.lastIndexOf('/'));
-                if (dirPath) {
-                    root.wallpaperDir = dirPath;
-                    CacheData.wallpaperLastPath = dirPath;
-                    CacheData.saveCache();
-                }
-                close();
+            onAccepted: paths => {
+                root.setCurrentWallpaper(paths[0]);
+                root.wallpaperDir = paths[0].substring(0, paths[0].lastIndexOf('/'));
             }
         }
     }
@@ -581,9 +540,26 @@ Item {
         spacing: 0
 
         Item {
+            id: wallpaperView
             width: parent.width
-            height: parent.height - 50
+            height: parent.height - DashMetrics.wallpaperFooterHeight
 
+            Loader {
+                anchors.fill: parent
+                active: root.carousel
+                visible: active
+
+                sourceComponent: WallpaperCarousel {
+                    paths: root.filteredWallpaperPaths
+                    currentIndex: root.flatIndex
+                    currentWallpaper: root.getCurrentWallpaper()
+                    animate: root.enableAnimation
+                    onIndexRequested: index => root.selectFlat(index)
+                    onActivated: path => root.setCurrentWallpaper(path)
+                }
+            }
+
+            // Dank* wrappers reset contentY on model change and take the wheel; the pager needs snap-one-item paging.
             ListView {
                 id: pager
                 anchors.centerIn: parent
@@ -594,7 +570,7 @@ Item {
                 highlightRangeMode: ListView.StrictlyEnforceRange
                 preferredHighlightBegin: 0
                 preferredHighlightEnd: height
-                highlightMoveDuration: root.enableAnimation ? Theme.mediumDuration : 0
+                highlightMoveDuration: root.enableAnimation && DashMetrics.animationsEnabled ? DashMetrics.transitionDuration : 0
                 boundsBehavior: Flickable.StopAtBounds
                 clip: true
                 enabled: root.active
@@ -604,7 +580,8 @@ Item {
                 focus: false
                 cacheBuffer: Math.max(0, height * root.pagerCachePages)
                 reuseItems: false
-                model: height > 1 ? root.totalPages : 0
+                visible: !root.carousel
+                model: !root.carousel && height > 1 ? root.totalPages : 0
 
                 onCountChanged: {
                     if (count > 0 && currentIndex !== root.currentPage)
@@ -612,23 +589,19 @@ Item {
                 }
 
                 onCurrentIndexChanged: {
-                    if (!moving) {
+                    if (!moving)
                         return;
-                    }
-                    if (currentIndex >= 0 && currentIndex !== root.currentPage) {
+                    if (currentIndex >= 0 && currentIndex !== root.currentPage)
                         root.currentPage = currentIndex;
-                    }
                 }
 
                 Component.onCompleted: currentIndex = root.currentPage
 
-                Connections {
-                    target: root
-                    function onCurrentPageChanged() {
-                        if (pager.currentIndex !== root.currentPage) {
-                            pager.currentIndex = root.currentPage;
-                        }
-                    }
+                readonly property int rootCurrentPage: root.currentPage
+
+                onRootCurrentPageChanged: {
+                    if (currentIndex !== rootCurrentPage)
+                        currentIndex = rootCurrentPage;
                 }
 
                 delegate: GridView {
@@ -638,32 +611,32 @@ Item {
 
                     width: pager.width
                     height: Math.max(1, pager.height)
-                    cellWidth: width / 4
-                    cellHeight: height / 4
+                    cellWidth: Math.max(1, Math.floor(width / root.columns))
+                    cellHeight: Math.max(1, Math.floor(height / root.rows))
                     interactive: false
                     keyNavigationEnabled: false
                     activeFocusOnTab: false
                     focus: false
                     highlightFollowsCurrentItem: true
-                    highlightMoveDuration: root.enableAnimation ? Theme.shortDuration : 0
+                    highlightMoveDuration: root.enableAnimation && DashMetrics.animationsEnabled ? DashMetrics.fadeDuration : 0
                     currentIndex: root.currentPage === pageIndex ? root.gridIndex : -1
 
                     highlight: Item {
-                        z: 1000
+                        z: DashMetrics.overlayZ
                         Rectangle {
                             anchors.fill: parent
-                            anchors.margins: Theme.spacingXS
+                            anchors.margins: Theme.spacingXS - Theme.focusRingOffset / 2
                             color: "transparent"
-                            border.width: 3
-                            border.color: Theme.primary
-                            radius: Theme.cornerRadius
+                            border.width: Theme.focusRingWidth
+                            border.color: Theme.focusRingColor
+                            radius: DashMetrics.wallpaperThumbRadius + Theme.focusRingOffset / 2
                         }
                     }
 
                     reuseItems: true
                     model: ScriptModel {
                         values: {
-                            root.gridRevision; // re-evaluate when sort order changes in place
+                            root.gridRevision; // dependency only
                             const startIndex = pageGrid.pageIndex * root.itemsPerPage;
                             const endIndex = Math.min(startIndex + root.itemsPerPage, root.wallpaperCount);
                             return root.filteredWallpaperPaths.slice(startIndex, endIndex);
@@ -671,12 +644,10 @@ Item {
                     }
 
                     onCountChanged: {
-                        if (root.currentPage !== pageIndex || count === 0) {
+                        if (root.currentPage !== pageIndex || count === 0)
                             return;
-                        }
-                        if (root.gridIndex >= count) {
+                        if (root.gridIndex >= count)
                             root.gridIndex = count - 1;
-                        }
                     }
 
                     delegate: Item {
@@ -684,27 +655,16 @@ Item {
                         height: pageGrid.cellHeight
 
                         property string wallpaperPath: modelData || ""
-                        property bool isSelected: getCurrentWallpaper() === modelData
+                        property bool isSelected: root.getCurrentWallpaper() === modelData
 
                         Rectangle {
                             id: wallpaperCard
                             anchors.fill: parent
                             anchors.margins: Theme.spacingXS
-                            color: Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency)
-                            radius: Theme.cornerRadius
-
-                            Rectangle {
-                                anchors.fill: parent
-                                color: isSelected ? Theme.primaryPressed : Theme.withAlpha(Theme.primaryPressed, 0)
-                                radius: parent.radius
-
-                                Behavior on color {
-                                    ColorAnimation {
-                                        duration: Theme.shortDuration
-                                        easing.type: Theme.standardEasing
-                                    }
-                                }
-                            }
+                            color: Theme.foregroundColor(Theme.cardSurface, Theme.isFloatingWindow(root))
+                            border.width: Theme.layerOutlineWidth
+                            border.color: Theme.outlineMedium
+                            radius: DashMetrics.wallpaperThumbRadius
 
                             ClippingRectangle {
                                 anchors.fill: parent
@@ -712,18 +672,36 @@ Item {
                                 color: "transparent"
 
                                 CachingImage {
-                                    id: thumbnailImage
                                     anchors.fill: parent
                                     imagePath: modelData || ""
-                                    maxCacheSize: 256
+                                    maxCacheSize: DashMetrics.wallpaperThumbCache
                                     animate: false
                                     opacity: status === Image.Ready ? 1 : 0
 
                                     Behavior on opacity {
+                                        enabled: DashMetrics.animationsEnabled
                                         NumberAnimation {
-                                            duration: Theme.shortDuration
-                                            easing.type: Theme.standardEasing
+                                            duration: DashMetrics.fadeDuration
+                                            easing.type: Easing.BezierSpline
+                                            easing.bezierCurve: Theme.expressiveCurves.expressiveEffects
                                         }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: parent.radius
+                                color: Theme.withAlpha(Theme.primary, isSelected ? Theme.stateLayerFocus : 0)
+                                border.width: isSelected ? Theme.outlineWidthFocused : 0
+                                border.color: Theme.primary
+
+                                Behavior on color {
+                                    enabled: DashMetrics.animationsEnabled
+                                    ColorAnimation {
+                                        duration: DashMetrics.fadeDuration
+                                        easing.type: Easing.BezierSpline
+                                        easing.bezierCurve: Theme.expressiveCurves.expressiveEffects
                                     }
                                 }
                             }
@@ -732,19 +710,10 @@ Item {
                                 anchors.fill: parent
                                 cornerRadius: parent.radius
                                 stateColor: Theme.primary
-                            }
-
-                            MouseArea {
-                                id: wallpaperMouseArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-
                                 onClicked: {
-                                    gridIndex = index;
-                                    if (modelData) {
-                                        setCurrentWallpaper(modelData);
-                                    }
+                                    root.gridIndex = index;
+                                    if (modelData)
+                                        root.setCurrentWallpaper(modelData);
                                 }
                             }
                         }
@@ -754,28 +723,33 @@ Item {
 
             DankSpinner {
                 anchors.centerIn: parent
-                size: 40
+                size: DashMetrics.spinnerSize
                 visible: wallpaperFolderModel.status === FolderListModel.Loading && wallpaperFolderModel.count === 0
             }
 
-            StyledText {
+            CcEmptyState {
                 anchors.centerIn: parent
                 visible: wallpaperFolderModel.status === FolderListModel.Ready && root.wallpaperCount === 0
-                text: root.searchQuery.trim() !== "" ? I18n.tr("No results found") : I18n.tr("No wallpapers found\n\nClick the folder icon below to browse")
-                font.pixelSize: 14
-                color: Theme.outline
-                horizontalAlignment: Text.AlignHCenter
+                iconName: root.searchQuery.trim() !== "" ? "search_off" : "wallpaper"
+                title: root.searchQuery.trim() !== "" ? I18n.tr("No results found") : I18n.tr("No wallpapers")
+
+                DankButton {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: I18n.tr("Choose wallpaper folder")
+                    visible: root.searchQuery.trim() === ""
+                    onClicked: root.openFolderBrowser()
+                }
             }
         }
 
         Column {
             width: parent.width
-            height: 50
+            height: DashMetrics.wallpaperFooterHeight
 
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: controlsRow.width + actionButtons.width + spacing
-                height: 32
+                height: DashMetrics.wallpaperControlSize
                 spacing: Theme.spacingS
 
                 Row {
@@ -783,64 +757,36 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Theme.spacingS
 
-                    DankActionButton {
-                        anchors.verticalCenter: parent.verticalCenter
+                    FooterButton {
+                        id: previousPageButton
                         iconName: "skip_previous"
-                        iconSize: 20
-                        buttonSize: 32
-                        enabled: totalPages > 1
-                        opacity: enabled ? 1.0 : 0.3
-                        tooltipText: I18n.tr("Previous page")
-                        tooltipSide: "top"
+                        enabled: root.totalPages > 1
+                        Accessible.name: I18n.tr("Previous page")
+                        onClicked: root.currentPage = (root.currentPage - 1 + root.totalPages) % root.totalPages
+                    }
+
+                    DankButton {
+                        id: pageButton
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.wallpaperCount > 0 ? (root.wallpaperCount === 1 ? I18n.tr("%1 wallpaper  •  %2 / %3", "singular, %1 is 1, %2 current page, %3 total pages").arg(root.wallpaperCount).arg(root.currentPage + 1).arg(root.totalPages) : I18n.tr("%1 wallpapers  •  %2 / %3", "plural, %1 is a count, %2 current page, %3 total pages").arg(root.wallpaperCount).arg(root.currentPage + 1).arg(root.totalPages)) : I18n.tr("No wallpapers")
+                        buttonHeight: DashMetrics.wallpaperControlSize
+                        horizontalPadding: Theme.spacingS
+                        backgroundColor: "transparent"
+                        textColor: Theme.onSurfaceVariant
                         onClicked: {
-                            if (totalPages > 1) {
-                                currentPage = (currentPage - 1 + totalPages) % totalPages;
-                            }
+                            if (root.totalPages <= 1)
+                                return;
+                            sortMenu.closeDropdownMenu();
+                            pageJumpPopup.visible = !pageJumpPopup.visible;
                         }
                     }
 
-                    StyledText {
-                        id: pageIndicator
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: root.wallpaperCount > 0 ? (root.wallpaperCount === 1 ? I18n.tr("%1 wallpaper  •  %2 / %3").arg(root.wallpaperCount).arg(currentPage + 1).arg(totalPages) : I18n.tr("%1 wallpapers  •  %2 / %3").arg(root.wallpaperCount).arg(currentPage + 1).arg(totalPages)) : I18n.tr("No wallpapers")
-                        font.pixelSize: 14
-                        color: pageIndicatorMouseArea.containsMouse && pageIndicatorMouseArea.enabled ? Theme.primary : Theme.surfaceText
-                        opacity: 0.7
-
-                        MouseArea {
-                            id: pageIndicatorMouseArea
-                            anchors.fill: parent
-                            enabled: totalPages > 1
-                            hoverEnabled: true
-                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: {
-                                sortMenu.visible = false;
-                                pageJumpPopup.visible = !pageJumpPopup.visible;
-                            }
-                            onEntered: if (enabled)
-                                pageJumpTooltip.show(I18n.tr("Jump to page"), pageIndicator, 0, 0, "top")
-                            onExited: pageJumpTooltip.hide()
-                        }
-
-                        DankTooltipV2 {
-                            id: pageJumpTooltip
-                        }
-                    }
-
-                    DankActionButton {
-                        anchors.verticalCenter: parent.verticalCenter
+                    FooterButton {
+                        id: nextPageButton
                         iconName: "skip_next"
-                        iconSize: 20
-                        buttonSize: 32
-                        enabled: totalPages > 1
-                        opacity: enabled ? 1.0 : 0.3
-                        tooltipText: I18n.tr("Next page")
-                        tooltipSide: "top"
-                        onClicked: {
-                            if (totalPages > 1) {
-                                currentPage = (currentPage + 1) % totalPages;
-                            }
-                        }
+                        enabled: root.totalPages > 1
+                        Accessible.name: I18n.tr("Next page")
+                        onClicked: root.currentPage = (root.currentPage + 1) % root.totalPages
                     }
                 }
 
@@ -850,140 +796,107 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Theme.spacingS
 
-                    DankActionButton {
+                    FooterButton {
                         id: sortButton
-                        anchors.verticalCenter: parent.verticalCenter
                         iconName: "filter_list"
-                        iconSize: 20
-                        buttonSize: 32
-                        opacity: 0.7
                         enabled: wallpaperFolderModel.count > 0
                         tooltipText: I18n.tr("Sort wallpapers")
-                        tooltipSide: "top"
+                        Accessible.description: [root.sortOptions[Math.max(0, root.sortKeys.indexOf(root.sortKey))], root.sortDescending ? I18n.tr("Descending") : I18n.tr("Ascending")].join(" · ")
                         onClicked: {
                             pageJumpPopup.visible = false;
-                            sortMenu.visible = !sortMenu.visible;
+                            if (sortMenu.menuVisible) {
+                                sortMenu.closeDropdownMenu();
+                                return;
+                            }
+                            root.openSortMenu();
+                        }
+                        Keys.onDownPressed: event => {
+                            root.openSortMenu();
+                            event.accepted = true;
+                        }
+
+                        DankDropdown {
+                            id: sortMenu
+
+                            showTrigger: false
+                            popupAnchorItem: sortButton
+                            focusReturnTarget: sortButton
+                            transientSurfaceTracker: root.transientSurfaceTracker
+                            openUpwards: true
+                            alignPopupRight: !I18n.isRtl
+                            popupWidth: Math.min(root.width, Theme.smallBreakpoint / 2)
+                            options: root.sortOptions.concat([I18n.tr("Ascending"), I18n.tr("Descending")])
+                            optionIcons: ["sort_by_alpha", "straighten", "history", "category", root.sortDescending ? "arrow_upward" : "check", root.sortDescending ? "check" : "arrow_downward"]
+                            onValueChanged: value => root.chooseSort(value)
                         }
                     }
 
-                    DankActionButton {
-                        id: browseButton
-                        anchors.verticalCenter: parent.verticalCenter
+                    FooterButton {
+                        id: folderButton
                         iconName: "folder_open"
-                        iconSize: 20
-                        buttonSize: 32
-                        opacity: 0.7
                         tooltipText: I18n.tr("Choose wallpaper folder")
-                        tooltipSide: "top"
-                        onClicked: {
-                            wallpaperBrowserLoader.active = true;
-                            wallpaperBrowserLoader.item.open();
-                        }
+                        onClicked: root.openFolderBrowser()
                     }
 
                     Item {
                         id: searchControl
 
                         anchors.verticalCenter: parent.verticalCenter
-                        width: root.searchExpanded ? 190 : 32
-                        height: 32
+                        width: root.searchExpanded ? DashMetrics.wallpaperSearchWidth : DashMetrics.wallpaperControlSize
+                        height: DashMetrics.wallpaperControlSize
                         clip: true
 
                         Behavior on width {
+                            enabled: DashMetrics.animationsEnabled
                             NumberAnimation {
-                                duration: Theme.shortDuration
-                                easing.type: Theme.standardEasing
+                                duration: DashMetrics.transitionDuration
+                                easing.type: Easing.BezierSpline
+                                easing.bezierCurve: Theme.expressiveCurves.standard
                             }
                         }
 
-                        DankActionButton {
+                        FooterButton {
                             id: searchToggleButton
 
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
                             iconName: "search"
-                            iconSize: 20
-                            buttonSize: 32
-                            opacity: root.searchExpanded ? 0 : 0.7
-                            visible: opacity > 0
-                            tooltipText: I18n.tr("Search...")
-                            tooltipSide: "top"
+                            visible: !root.searchExpanded
+                            Accessible.name: I18n.tr("Search", "search field placeholder") + "…"
                             onClicked: root.focusSearch()
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.shortDuration
-                                    easing.type: Theme.standardEasing
-                                }
-                            }
                         }
 
-                        DankTextField {
+                        DankSearchField {
                             id: wallpaperSearchField
 
                             anchors.fill: parent
                             topPadding: Theme.spacingXS
                             bottomPadding: Theme.spacingXS
-                            leftIconName: "search"
-                            leftIconSize: 18
+                            leftIconSize: Theme.iconSizeSmall
                             showClearButton: false
-                            rightAccessoryWidth: root.searchQuery !== "" ? 54 : 26
-                            placeholderText: I18n.tr("Search...")
+                            rightAccessoryWidth: (root.searchQuery !== "" ? DashMetrics.wallpaperSmallButtonSize + Theme.spacingXXS : 0) + DashMetrics.wallpaperSmallButtonSize + Theme.spacingXXS
+                            placeholderText: I18n.tr("Search", "search field placeholder") + "…"
                             keyForwardTargets: [searchKeyHandler]
-                            opacity: root.searchExpanded ? 1 : 0
-                            visible: opacity > 0
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.shortDuration
-                                    easing.type: Theme.standardEasing
-                                }
-                            }
+                            visible: root.searchExpanded
                         }
 
-                        DankActionButton {
+                        SearchButton {
                             anchors.right: collapseSearchButton.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            z: 2
                             iconName: "backspace"
-                            iconSize: 16
-                            buttonSize: 28
-                            opacity: root.searchExpanded && root.searchQuery !== "" ? 0.7 : 0
-                            visible: opacity > 0
-                            tooltipText: I18n.tr("Clear")
-                            tooltipSide: "top"
+                            visible: root.searchExpanded && root.searchQuery !== ""
+                            Accessible.name: I18n.tr("Clear", "verb, button clearing a search, image, job list or notification")
                             onClicked: root.clearSearch()
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.shortDuration
-                                    easing.type: Theme.standardEasing
-                                }
-                            }
                         }
 
-                        DankActionButton {
+                        SearchButton {
                             id: collapseSearchButton
 
                             anchors.right: parent.right
-                            anchors.rightMargin: 2
-                            anchors.verticalCenter: parent.verticalCenter
-                            z: 2
+                            anchors.rightMargin: Theme.spacingXXS
                             iconName: "close"
-                            iconSize: 16
-                            buttonSize: 28
-                            opacity: root.searchExpanded ? 0.7 : 0
-                            visible: opacity > 0
-                            tooltipText: I18n.tr("Close")
-                            tooltipSide: "top"
+                            visible: root.searchExpanded
+                            Accessible.name: I18n.tr("Close")
                             onClicked: root.collapseSearch()
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: Theme.shortDuration
-                                    easing.type: Theme.standardEasing
-                                }
-                            }
                         }
                     }
                 }
@@ -991,12 +904,11 @@ Item {
 
             StyledText {
                 width: parent.width
-                height: 18
-                text: selectedFileName
-                font.pixelSize: 12
-                color: Theme.surfaceText
-                opacity: 0.5
-                visible: selectedFileName !== ""
+                height: DashMetrics.wallpaperFilenameHeight
+                text: root.selectedFileName
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.onSurfaceVariant
+                visible: root.selectedFileName !== "" && root.options.filename !== false
                 elide: Text.ElideMiddle
                 horizontalAlignment: Text.AlignHCenter
             }
@@ -1005,86 +917,51 @@ Item {
 
     function jumpToPage(value) {
         const n = parseInt(value);
-        if (!isNaN(n)) {
+        if (!isNaN(n))
             currentPage = Math.max(0, Math.min(totalPages - 1, n - 1));
-        }
         pageJumpPopup.visible = false;
     }
 
-    // Click anywhere outside an open overlay to dismiss it.
     MouseArea {
         anchors.fill: parent
-        z: 99
-        visible: sortMenu.visible || pageJumpPopup.visible
+        z: DashMetrics.overlayZ - 1
+        visible: pageJumpPopup.visible
         enabled: visible
-        onClicked: closeOverlays()
-    }
-
-    BackdropBlur {
-        visible: sortMenu.visible
-        z: 100
-        width: sortMenu.width
-        height: sortMenu.height
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.rightMargin: Theme.spacingM
-        anchors.bottomMargin: 56
-        radius: Theme.cornerRadius
-        sourceItem: contentColumn
-    }
-
-    FileBrowserSortMenu {
-        id: sortMenu
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.rightMargin: Theme.spacingM
-        anchors.bottomMargin: 56
-        z: 101
-        surfaceColor: Theme.readableSurface
-        sortBy: root.sortBy
-        sortAscending: root.sortAscending
-        onSortBySelected: value => {
-            root.sortBy = value;
-            root.persistSort();
-        }
-        onSortOrderSelected: ascending => {
-            root.sortAscending = ascending;
-            root.persistSort();
-        }
+        onClicked: root.closeOverlays()
     }
 
     BackdropBlur {
         visible: pageJumpPopup.visible
-        z: 100
+        z: DashMetrics.overlayZ
         width: pageJumpPopup.width
         height: pageJumpPopup.height
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 56
-        radius: Theme.cornerRadius
+        anchors.bottomMargin: DashMetrics.wallpaperOverlayBottomMargin
+        radius: Theme.cornerRadiusM
         sourceItem: contentColumn
     }
 
     StyledRect {
         id: pageJumpPopup
-        width: 180
+        width: DashMetrics.pageJumpWidth
         height: jumpColumn.height + Theme.spacingM * 2
-        color: Theme.readableSurface
-        radius: Theme.cornerRadius
+        color: Theme.nestedSurface
+        border.width: Theme.layerOutlineWidth
         border.color: Theme.outlineMedium
-        border.width: 1
+        radius: Theme.cornerRadiusM
         visible: false
-        z: 101
+        z: DashMetrics.overlayZ + 1
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 56
+        anchors.bottomMargin: DashMetrics.wallpaperOverlayBottomMargin
 
         onVisibleChanged: {
-            if (visible) {
-                pageJumpField.text = (root.currentPage + 1).toString();
-                pageJumpField.forceActiveFocus();
-                pageJumpField.selectAll();
-            }
+            if (!visible)
+                return;
+            pageJumpField.text = (root.currentPage + 1).toString();
+            pageJumpField.forceActiveFocus();
+            pageJumpField.selectAll();
         }
 
         Column {
@@ -1096,10 +973,10 @@ Item {
             spacing: Theme.spacingXS
 
             StyledText {
-                text: I18n.tr("Jump to page (1 - %1)").arg(root.totalPages)
+                text: I18n.tr("Jump to page (1 - %1)", "wallpaper page jump prompt, %1 is the last page number").arg(root.totalPages)
                 font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceTextMedium
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
+                color: Theme.onSurfaceVariant
             }
 
             DankTextField {
@@ -1116,5 +993,20 @@ Item {
                 onAccepted: root.jumpToPage(text)
             }
         }
+    }
+
+    component FooterButton: DankActionButton {
+        anchors.verticalCenter: parent.verticalCenter
+        iconSize: DashMetrics.wallpaperControlIconSize
+        buttonSize: DashMetrics.wallpaperControlSize
+        tooltipSide: "top"
+    }
+
+    component SearchButton: DankActionButton {
+        anchors.verticalCenter: parent.verticalCenter
+        z: 2
+        iconSize: Theme.iconSizeSmall
+        buttonSize: DashMetrics.wallpaperSmallButtonSize
+        tooltipSide: "top"
     }
 }

@@ -29,18 +29,10 @@ FocusScope {
         const targetMode = root.controller.launcherPendingMode || SessionData.getLauncherRestoreMode();
 
         launcherContent.closeTransientUi?.();
-        launcherController.reset();
-        launcherController.explicitQuerySession = !!root.controller.launcherPendingQuery;
-        launcherController.searchMode = targetMode;
-        launcherController.historyIndex = -1;
-
         launcherContent.suspendSearchUpdates = true;
         launcherContent.searchField.text = targetQuery;
         launcherContent.suspendSearchUpdates = false;
-        if (targetQuery.length > 0)
-            launcherController.setSearchQuery(targetQuery);
-        else
-            launcherController.performSearch();
+        launcherController.openSession(targetQuery, !!root.controller.launcherPendingQuery, targetMode, true);
 
         launcherContent.resetScroll();
         root.focusFace();
@@ -77,6 +69,7 @@ FocusScope {
         anchors.topMargin: Theme.spacingM
         anchors.bottomMargin: root.bottomInset
         parentModal: hostContract
+        resultsInset: 0
         controllerOverride: root.launcherController
         transientSurfaceTracker: root.transientSurfaceTracker
         showResultsWithoutQuery: true

@@ -11,18 +11,20 @@ Item {
 
     required property var targetWindow
     property bool blurEnabled: Theme.connectedSurfaceBlurEnabled
+    property color surfaceColor: "transparent"
     property real blurX: 0
     property real blurY: 0
     property real blurWidth: 0
     property real blurHeight: 0
     property real blurRadius: 0
+    property real blurBottomRadius: blurRadius
     property bool clipEnabled: false
     property real clipX: blurX
     property real clipY: blurY
     property real clipWidth: blurWidth
     property real clipHeight: blurHeight
 
-    readonly property bool _active: blurEnabled && BlurService.enabled && !!targetWindow
+    readonly property bool _active: blurEnabled && surfaceColor.a < 1 && BlurService.enabled && !!targetWindow
 
     Region {
         id: blurRegion
@@ -33,11 +35,27 @@ Item {
         radius: root.blurRadius
 
         Region {
+            readonly property bool needed: root.blurBottomRadius < root.blurRadius
+            x: root.blurX
+            y: root.blurY + root.blurRadius
+            width: needed ? root.blurWidth : 0
+            height: needed ? Math.max(0, root.blurHeight - root.blurRadius) : 0
+            radius: root.blurBottomRadius
+        }
+
+        Region {
             intersection: Intersection.Intersect
             x: root.clipEnabled ? root.clipX : root.blurX
             y: root.clipEnabled ? root.clipY : root.blurY
             width: root.clipEnabled ? root.clipWidth : root.blurWidth
             height: root.clipEnabled ? root.clipHeight : root.blurHeight
+        }
+
+        // Hyprland blurs the whole surface when the region lies entirely outside it
+        Region {
+            intersection: Intersection.Intersect
+            width: root.targetWindow?.width ?? 0
+            height: root.targetWindow?.height ?? 0
         }
     }
 
@@ -66,6 +84,7 @@ Item {
     onBlurWidthChanged: settleKickAction.restart()
     onBlurHeightChanged: settleKickAction.restart()
     onBlurRadiusChanged: settleKickAction.restart()
+    onBlurBottomRadiusChanged: settleKickAction.restart()
     onClipEnabledChanged: settleKickAction.restart()
     onClipXChanged: settleKickAction.restart()
     onClipYChanged: settleKickAction.restart()
@@ -73,7 +92,7 @@ Item {
     onClipHeightChanged: settleKickAction.restart()
 
     function _runSettleKick() {
-        if (!BlurService.compositorSupported || !targetWindow?.visible)
+        if (!_active || !targetWindow?.visible)
             return;
         kick();
         settleRepeatTimer.restart();
@@ -90,7 +109,7 @@ Item {
         interval: 96
         repeat: false
         onTriggered: {
-            if (!root.targetWindow?.visible)
+            if (!root._active || !root.targetWindow?.visible)
                 return;
             root.kick();
         }

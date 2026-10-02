@@ -1,300 +1,157 @@
 import QtQuick
 import qs.Common
 import qs.Widgets
+import qs.Modules.Settings.Widgets
 import qs.Services
 
-StyledRect {
+SettingsCard {
     id: root
 
     property var updatesList: []
     property bool isUpdating: false
+    property bool operationsBlocked: false
     property string currentUpdatingPlugin: ""
+    property var updateErrors: ({})
 
-    width: parent.width
-    height: visible ? Math.max(200, innerColumn.implicitHeight + Theme.spacingL * 2) : 0
-    radius: Theme.cornerRadius
-    color: Theme.floatingWindowNestedSurface
-    border.color: Theme.outlineMedium
-    border.width: Theme.layerOutlineWidth
-    clip: true
+    signal pluginUpdated(string pluginId)
+    signal updatesRequested(var plugins)
 
+    iconName: "download"
+    title: I18n.tr("Available Updates (%1)", "plugin updates dialog title, %1 is a count").arg(updatesList.length)
     visible: false
 
-    Behavior on height {
-        enabled: Theme.currentAnimationSpeed !== SettingsData.AnimationSpeed.None
-        NumberAnimation {
-            duration: Theme.mediumDuration
-            easing.type: Theme.standardEasing
-        }
-    }
-
-    Behavior on opacity {
-        NumberAnimation {
-            duration: Theme.shortDuration
-        }
+    headerActions: DankActionButton {
+        iconName: "close"
+        tooltipText: I18n.tr("Close")
+        iconColor: Theme.surfaceVariantText
+        enabled: !root.isUpdating && !root.operationsBlocked
+        onClicked: root.hide()
     }
 
     function show(list) {
+        if (isUpdating || operationsBlocked)
+            return;
         updatesList = list || [];
         visible = true;
     }
 
     function hide() {
-        if (!isUpdating) {
-            visible = false;
-            updatesList = [];
-        }
+        if (isUpdating || operationsBlocked)
+            return;
+        visible = false;
+        updatesList = [];
+        updateErrors = ({});
     }
 
     function updateSingle(plugin) {
-        if (isUpdating)
-            return;
-        isUpdating = true;
-        currentUpdatingPlugin = plugin.name;
-
-        DMSService.update(plugin.id, response => {
-            isUpdating = false;
-            currentUpdatingPlugin = "";
-            if (response.error) {
-                ToastService.showError(I18n.tr("Failed to update %1: %2").arg(plugin.name).arg(response.error));
-            } else {
-                ToastService.showInfo(I18n.tr("Plugin updated: %1").arg(plugin.name));
-                PluginService.forceRescanPlugin(plugin.id);
-                DMSService.listInstalled();
-                updatesList = updatesList.filter(p => p.id !== plugin.id);
-                if (updatesList.length === 0) {
-                    root.hide();
-                }
-            }
-        });
+        updatesRequested([plugin]);
     }
 
     function updateAll() {
-        if (isUpdating)
+        updatesRequested(updatesList.filter(plugin => PluginService.checkPluginCompatibility(plugin.requires_dms)));
+    }
+
+    function updatePlugins(list) {
+        if (isUpdating || operationsBlocked || list.length === 0)
             return;
         isUpdating = true;
-
-        var list = updatesList.slice();
-        var idx = 0;
-
+        updateErrors = ({});
+        let index = 0;
         function updateNext() {
-            if (idx >= list.length) {
+            if (index >= list.length) {
                 isUpdating = false;
                 currentUpdatingPlugin = "";
                 DMSService.listInstalled();
-                root.hide();
                 return;
             }
-
-            var plugin = list[idx];
+            const plugin = list[index++];
             currentUpdatingPlugin = plugin.name;
-
-            DMSService.update(plugin.id, response => {
+            PluginService.updatePlugin(plugin.id, response => {
                 if (response.error) {
-                    ToastService.showError(I18n.tr("Failed to update %1: %2").arg(plugin.name).arg(response.error));
-                } else {
-                    PluginService.forceRescanPlugin(plugin.id);
-                    updatesList = updatesList.filter(p => p.id !== plugin.id);
+                    updateErrors = Object.assign({}, updateErrors, {
+                        [plugin.id]: I18n.tr("Failed to update %1: %2", "plugin update error, %1 is the plugin name, %2 is the error message").arg(plugin.name).arg(response.error)
+                    });
+                    updateNext();
+                    return;
                 }
-                idx++;
+                root.pluginUpdated(plugin.id);
+                updatesList = updatesList.filter(entry => entry.id !== plugin.id);
                 updateNext();
             });
         }
-
         updateNext();
     }
 
-    Column {
-        id: innerColumn
-        anchors.fill: parent
-        anchors.margins: Theme.spacingL
-        spacing: Theme.spacingM
+    SettingsNoteRow {
+        visible: !root.isUpdating && root.updatesList.length > 0
+        text: I18n.tr("Plugin updates can change the code running in your session. Review the changes before updating.", "plugin update audit reminder")
+    }
 
-        Row {
-            width: parent.width
-            spacing: Theme.spacingM
+    SettingsRow {
+        visible: root.isUpdating
+        title: root.currentUpdatingPlugin ? I18n.tr("Updating %1...", "plugin updates dialog progress, %1 is the plugin name").arg(root.currentUpdatingPlugin) : I18n.tr("Updating plugins...")
+        leading: DankSpinner {
+            size: Theme.iconSize
+            running: root.isUpdating
+        }
+    }
 
-            DankIcon {
-                name: "download"
-                size: Theme.iconSize
-                color: Theme.primary
-                anchors.verticalCenter: parent.verticalCenter
-            }
+    SettingsRow {
+        visible: Object.keys(root.updateErrors).length > 0
+        subtitle: Object.values(root.updateErrors).join("\n")
+        subtitleColor: Theme.error
+    }
 
-            StyledText {
-                text: I18n.tr("Available Updates (%1)").arg(root.updatesList.length)
-                font.pixelSize: Theme.fontSizeLarge
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
-            }
+    Repeater {
+        model: root.isUpdating ? [] : root.updatesList
 
-            Item {
-                width: parent.width - parent.spacing * 2 - Theme.iconSize - parent.children[1].implicitWidth - collapseBtn.width
-                height: 1
+        delegate: SettingsRow {
+            required property var modelData
+
+            readonly property bool compatible: PluginService.checkPluginCompatibility(modelData.requires_dms)
+
+            iconName: modelData.icon || "extension"
+            title: modelData.name || ""
+            subtitle: !compatible ? I18n.tr("Requires DMS %1", "plugin incompatibility notice, %1 is the required DMS version").arg(modelData.requires_dms) : modelData.author ? I18n.tr("by %1", "author attribution").arg(modelData.author) : ""
+            subtitleColor: compatible ? supportingContentColor : Theme.error
+
+            DankActionButton {
+                iconName: "open_in_new"
+                tooltipText: I18n.tr("View Changes", "open plugin changes before updating")
+                visible: !!modelData.diffUrl || !!modelData.repo
+                onClicked: Qt.openUrlExternally(modelData.diffUrl || modelData.repo)
             }
 
             DankActionButton {
-                id: collapseBtn
-                iconName: "close"
-                iconSize: Theme.iconSize - 2
-                iconColor: Theme.outline
-                anchors.verticalCenter: parent.verticalCenter
-                enabled: !root.isUpdating
-                onClicked: root.hide()
-            }
-        }
-
-        Item {
-            width: parent.width
-            height: isUpdating ? 40 : 0
-            visible: isUpdating
-            clip: true
-
-            Behavior on height {
-                NumberAnimation {
-                    duration: Theme.shortDuration
-                }
-            }
-
-            Row {
-                anchors.centerIn: parent
-                spacing: Theme.spacingM
-
-                DankSpinner {
-                    size: Theme.iconSize
-                    running: root.isUpdating
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                StyledText {
-                    text: root.currentUpdatingPlugin ? I18n.tr("Updating %1...").arg(root.currentUpdatingPlugin) : I18n.tr("Updating plugins...")
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.surfaceText
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-        }
-
-        DankFlickable {
-            width: parent.width
-            height: Math.min(listCol.implicitHeight, 300)
-            clip: true
-            contentHeight: listCol.implicitHeight
-            visible: !isUpdating
-
-            Column {
-                id: listCol
-                width: parent.width
-                spacing: Theme.spacingM
-
-                Repeater {
-                    model: root.updatesList
-
-                    delegate: StyledRect {
-                        width: parent.width
-                        height: 64
-                        radius: Theme.cornerRadius
-                        color: Theme.floatingWindowNestedSurface
-                        border.color: Theme.outlineMedium
-                        border.width: Theme.layerOutlineWidth
-
-                        Row {
-                            anchors.fill: parent
-                            anchors.margins: Theme.spacingM
-                            spacing: Theme.spacingM
-
-                            DankIcon {
-                                name: modelData.icon || "extension"
-                                size: Theme.iconSize
-                                color: Theme.primary
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Column {
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: Theme.spacingXS
-                                width: parent.width - Theme.iconSize - Theme.spacingM - actionButtonsRow.width - Theme.spacingM
-
-                                StyledText {
-                                    text: modelData.name || ""
-                                    font.pixelSize: Theme.fontSizeMedium
-                                    font.weight: Font.Medium
-                                    color: Theme.surfaceText
-                                    elide: Text.ElideRight
-                                    width: parent.width
-                                    horizontalAlignment: Text.AlignLeft
-                                }
-
-                                StyledText {
-                                    text: modelData.author ? I18n.tr("by %1", "author attribution").arg(modelData.author) : ""
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.surfaceVariantText
-                                    elide: Text.ElideRight
-                                    width: parent.width
-                                    horizontalAlignment: Text.AlignLeft
-                                }
-                            }
-
-                            Row {
-                                id: actionButtonsRow
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: Theme.spacingS
-
-                                DankButton {
-                                    text: I18n.tr("Diff")
-                                    iconName: "open_in_new"
-                                    visible: !!modelData.diffUrl || !!modelData.repo
-                                    backgroundColor: Theme.floatingWindowFieldColor
-                                    textColor: Theme.surfaceText
-                                    onClicked: {
-                                        Qt.openUrlExternally(modelData.diffUrl || modelData.repo);
-                                    }
-                                }
-
-                                DankButton {
-                                    text: I18n.tr("Update")
-                                    iconName: "download"
-                                    enabled: !root.isUpdating
-                                    onClicked: {
-                                        root.updateSingle(modelData);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                StyledText {
-                    width: parent.width
-                    text: I18n.tr("No updates available.")
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.surfaceVariantText
-                    horizontalAlignment: Text.AlignHCenter
-                    visible: root.updatesList.length === 0
-                }
-            }
-        }
-
-        Row {
-            anchors.right: parent.right
-            spacing: Theme.spacingM
-            visible: !isUpdating
-
-            DankButton {
-                text: I18n.tr("Cancel")
-                iconName: "close"
-                backgroundColor: Theme.floatingWindowFieldColor
-                textColor: Theme.surfaceText
-                onClicked: root.hide()
-            }
-
-            DankButton {
-                text: I18n.tr("Update All")
                 iconName: "download"
-                enabled: root.updatesList.length > 0
-                onClicked: root.updateAll()
+                tooltipText: I18n.tr("Update", "verb, button installing a newer plugin version")
+                enabled: !root.isUpdating && !root.operationsBlocked && compatible
+                onClicked: root.updateSingle(modelData)
             }
+        }
+    }
+
+    SettingsRow {
+        visible: !root.isUpdating && root.updatesList.length === 0
+        subtitle: I18n.tr("No updates available.")
+    }
+
+    SettingsRow {
+        visible: !root.isUpdating
+
+        DankButton {
+            text: I18n.tr("Cancel")
+            iconName: "close"
+            backgroundColor: "transparent"
+            textColor: Theme.primary
+            onClicked: root.hide()
+        }
+
+        DankButton {
+            text: I18n.tr("Update All")
+            iconName: "download"
+            enabled: !root.operationsBlocked && root.updatesList.some(plugin => PluginService.checkPluginCompatibility(plugin.requires_dms))
+            onClicked: root.updateAll()
         }
     }
 }

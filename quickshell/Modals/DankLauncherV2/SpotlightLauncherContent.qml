@@ -1,12 +1,17 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Quickshell.Widgets
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modals.DankLauncherV2.Components
 
 FocusScope {
     id: root
+
+    LayoutMirroring.enabled: I18n.isRtl
+    LayoutMirroring.childrenInherit: true
 
     property var parentModal: null
     property alias searchField: searchInput
@@ -17,36 +22,19 @@ FocusScope {
     property bool showResultsWithoutQuery: false
     property bool suspendSearchUpdates: false
     property real maxResultsHeight: 0
+    property real resultsInset: LauncherMetrics.spotlightInset
 
     readonly property bool _hasQuery: root.showResultsWithoutQuery || searchInput.text.length > 0
-    readonly property real _searchBarH: 56
+    readonly property real _searchBarH: LauncherMetrics.pillHeight
     readonly property real _searchAreaH: _searchBarH
     readonly property alias searchAreaHeight: root._searchAreaH
     readonly property real actionPanelHeight: actionPanel.height
-    readonly property real _statusH: 92
-    readonly property real _rowH: 64
-    readonly property real _maxResultsH: root.maxResultsHeight > 0 ? root.maxResultsHeight : Math.min(430, (parentModal?.screenHeight ?? 900) * 0.55)
-    readonly property var _resultRows: _buildRows()
-    readonly property real _resultsContentH: _resultRows.length > 0 ? _resultRows.length * _rowH + resultsList.bottomInset : _statusH
+    readonly property real _statusH: Theme.listItemTwoLineHeight + Theme.spacingXL
+    readonly property real _maxResultsH: root.maxResultsHeight > 0 ? root.maxResultsHeight : Math.max(0, Math.min(LauncherMetrics.maxResultsHeight + resultsInset + resultsList.bottomInset, (parentModal?.screenHeight ?? Theme.mediumBreakpoint) - (parentModal?.modalY ?? 0) - LauncherMetrics.pillHeight - actionPanel.height - Theme.spacingL))
+    readonly property real _resultsContentH: resultsList.contentHeight > 0 ? LauncherMetrics.resultsGap + resultsList.contentHeight + resultsList.bottomInset : _statusH
     readonly property real _resultsH: _hasQuery ? Math.min(_resultsContentH, _maxResultsH) : 0
-    readonly property int _fastDuration: 90
-    readonly property int _resizeDuration: Theme.expressiveDurations.fast
-    readonly property bool _blurActive: Theme.blurForegroundLayers || Theme.transparentBlurLayers
-    readonly property real _searchSurfaceAlpha: {
-        if (Theme.transparentBlurLayers)
-            return _hasQuery ? 0.34 : 0.28;
-        if (Theme.blurForegroundLayers)
-            return Math.max(Theme.popupTransparency, _hasQuery ? 0.68 : 0.74);
-        return _hasQuery ? Theme.popupTransparency : Math.max(0.68, Theme.popupTransparency * 0.9);
-    }
-    readonly property color _searchSurfaceColor: Theme.withAlpha(_hasQuery ? Theme.surfaceContainerHigh : Theme.surfaceContainer, _searchSurfaceAlpha)
-    readonly property color _searchWellColor: {
-        if (searchInput.getActiveFocus())
-            return Theme.withAlpha(Theme.primaryContainer, Theme.transparentBlurLayers ? 0.42 : 1.0);
-        if (Theme.transparentBlurLayers)
-            return Theme.ccPillInactiveBg;
-        return Theme.surfaceContainer;
-    }
+    readonly property int _resizeDuration: Theme.expressiveDurations.expressiveFastSpatial
+    readonly property real _frameClipRadius: Math.max(0, (parentModal?.frameBottomRadius ?? 0) - resultsInset)
 
     implicitHeight: _searchAreaH + resultsContainer.height + actionPanel.height
 
@@ -56,7 +44,7 @@ FocusScope {
 
     Timer {
         id: resizeAnimEnableTimer
-        interval: 100
+        interval: Theme.expressiveDurations.expressiveEffects
         onTriggered: root._animateResize = true
     }
 
@@ -74,31 +62,6 @@ FocusScope {
         transientSurfaceTracker?.closeAll?.();
         actionPanel.hide();
         root.enabled = true;
-    }
-
-    function _buildRows() {
-        const flat = root.controller.flatModel || [];
-        const sections = root.controller.sections || [];
-        const rows = [];
-        const seen = {};
-        for (let i = 0; i < flat.length; i++) {
-            const entry = flat[i];
-            if (!entry || entry.isHeader || !entry.item)
-                continue;
-            const section = sections[entry.sectionIndex] || null;
-            // Plugin item ids embed result content, so key them by slot position instead
-            const base = entry.item.pluginId ? (entry.sectionId + ":" + entry.indexInSection) : (entry.item.id || (entry.sectionId + ":" + (entry.item.name || entry.indexInSection)));
-            const bump = seen[base] || 0;
-            seen[base] = bump + 1;
-            rows.push({
-                "_rowId": bump ? base + "#" + bump : base,
-                "item": entry.item,
-                "flatIndex": i,
-                "sectionTitle": section?.title || "",
-                "sectionIcon": section?.icon || ""
-            });
-        }
-        return rows;
     }
 
     function _focusSearch() {
@@ -153,12 +116,32 @@ FocusScope {
             root.controller.selectPrevious();
             event.accepted = true;
             return;
+        case Qt.Key_Right:
+        case Qt.Key_Left:
+            if (root.controller.getCurrentSectionViewMode() === "list")
+                break;
+            if ((event.key === Qt.Key_Right) !== I18n.isRtl)
+                root.controller.selectRight();
+            else
+                root.controller.selectLeft();
+            event.accepted = true;
+            return;
+        case Qt.Key_H:
+        case Qt.Key_L:
+            if (!hasCtrl || root.controller.getCurrentSectionViewMode() === "list")
+                break;
+            if ((event.key === Qt.Key_L) !== I18n.isRtl)
+                root.controller.selectRight();
+            else
+                root.controller.selectLeft();
+            event.accepted = true;
+            return;
         case Qt.Key_PageDown:
-            root.controller.selectPageDown(7);
+            root.controller.selectPageDown(resultsList.pageRows);
             event.accepted = true;
             return;
         case Qt.Key_PageUp:
-            root.controller.selectPageUp(7);
+            root.controller.selectPageUp(resultsList.pageRows);
             event.accepted = true;
             return;
         case Qt.Key_J:
@@ -175,6 +158,16 @@ FocusScope {
                 return;
             }
             break;
+        case Qt.Key_N:
+        case Qt.Key_P:
+            if (!hasCtrl)
+                break;
+            if (event.key === Qt.Key_N)
+                root.controller.selectNextSection();
+            else
+                root.controller.selectPreviousSection();
+            event.accepted = true;
+            return;
         case Qt.Key_Tab:
             if (hasCtrl) {
                 actionPanel.hide();
@@ -250,7 +243,7 @@ FocusScope {
         id: searchController
         active: !root.controllerOverride && (root.parentModal ? (root.parentModal.spotlightOpen || root.parentModal.isClosing) : true)
         viewModeContext: "spotlight"
-        forceLinearNavigation: true
+        forceLinearNavigation: false
     }
 
     LauncherContextMenu {
@@ -292,8 +285,7 @@ FocusScope {
 
         function onItemExecuted() {
             root.parentModal?.hide();
-            if (SettingsData.spotlightCloseNiriOverview && NiriService.inOverview)
-                NiriService.toggleOverview();
+            CompositorService.closeNiriOverviewOnWindowFocus();
         }
         function onModeChanged(mode, userInitiated) {
             if (!userInitiated || !SettingsData.rememberLastMode)
@@ -313,151 +305,59 @@ FocusScope {
         anchors.right: parent.right
         height: root._searchAreaH
 
-        Rectangle {
-            id: searchBarSurface
+        LauncherSearchField {
+            id: searchInput
+            pluginName: root.controller.activePluginName
+            pluginIcon: root.controller.activePluginId ? root.controller.getPluginMetadata(root.controller.activePluginId).icon : ""
             anchors.fill: parent
-            radius: Theme.cornerRadius
-            color: root._searchSurfaceColor
+            mode: root.controller.searchMode
+            showModes: SettingsData.spotlightBarShowModeChips || root._hasQuery
+            flat: true
+            onModeSelected: mode => root._selectMode(mode)
+            placeholderText: I18n.tr("Spotlight Search")
+            hidePlaceholderOnFocus: false
+            ignoreUpDownKeys: true
+            ignoreTabKeys: true
+            keyForwardTargets: [searchKeyHandler]
 
-            Behavior on color {
-                ColorAnimation {
-                    duration: root._fastDuration
-                    easing.type: Theme.standardEasing
+            onTextChanged: {
+                if (root.suspendSearchUpdates)
+                    return;
+                actionPanel.hide();
+                if (text.length > 0) {
+                    root.controller.setSearchQuery(text);
+                    return;
                 }
+                root.resetSearch();
             }
 
-            Rectangle {
-                id: leadingWell
-                width: 36
-                height: 36
-                radius: height / 2
-                anchors.left: parent.left
-                anchors.leftMargin: Theme.spacingM
-                anchors.verticalCenter: parent.verticalCenter
-                color: root._searchWellColor
-
-                DankIcon {
-                    anchors.centerIn: parent
-                    name: root.controller.activePluginId ? "extension" : root.controller.searchMode === "files" ? "folder" : "search"
-                    size: 20
-                    color: searchInput.getActiveFocus() ? Theme.primary : Theme.surfaceVariantText
-                }
-            }
-
-            Row {
-                id: rightControls
-                anchors.right: parent.right
-                anchors.rightMargin: Theme.spacingM
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.spacingXS
-
-                Row {
-                    id: categoryRow
-                    visible: SettingsData.spotlightBarShowModeChips || root._hasQuery
-                    spacing: Theme.spacingXS
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    Repeater {
-                        model: root._categoryModel
-
-                        delegate: Item {
-                            id: categoryChip
-                            required property var modelData
-                            required property int index
-
-                            readonly property bool isSelected: root._isCategorySelected(modelData)
-
-                            width: chipLabel.implicitWidth + Theme.spacingM * 2
-                            height: 26
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: height / 2
-                                color: chipColor.value
-
-                                DankColorAnimation {
-                                    id: chipColor
-                                    to: categoryChip.isSelected ? Theme.primary : chipArea.containsMouse ? Theme.surfaceHover : Theme.surfaceVariantAlpha
-                                    duration: root._fastDuration
-                                    easingType: Theme.standardEasing
-                                }
-
-                                StyledText {
-                                    id: chipLabel
-                                    anchors.centerIn: parent
-                                    text: categoryChip.modelData.label
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    font.weight: categoryChip.isSelected ? Font.Medium : Font.Normal
-                                    color: categoryChip.isSelected ? Theme.primaryText : Theme.surfaceVariantText
-                                }
-                            }
-
-                            MouseArea {
-                                id: chipArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root._selectCategory(categoryChip.index)
-                            }
-                        }
-                    }
-                }
-
-                DankActionButton {
-                    id: clearButton
-                    anchors.verticalCenter: parent.verticalCenter
-                    iconName: "close"
-                    iconSize: 16
-                    visible: searchInput.text.length > 0
-                    onClicked: {
-                        searchInput.text = "";
-                        root._focusSearch();
-                    }
-                }
-            }
-
-            DankTextField {
-                id: searchInput
-                anchors.left: leadingWell.right
-                anchors.right: rightControls.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                font.pixelSize: 18
-                font.weight: Font.Medium
-                placeholderText: I18n.tr("Spotlight Search")
-                hidePlaceholderOnFocus: false
-                backgroundColor: "transparent"
-                borderWidth: 0
-                focusedBorderWidth: 0
-                keyForwardTargets: [searchKeyHandler]
-
-                onTextChanged: {
-                    if (root.suspendSearchUpdates)
-                        return;
-                    actionPanel.hide();
-                    if (text.length > 0) {
-                        root.controller.setSearchQuery(text);
-                    } else {
-                        root.resetSearch();
-                    }
-                }
-
-                Item {
-                    id: searchKeyHandler
-
-                    Keys.onPressed: event => root._handleKey(event)
-                }
+            Item {
+                id: searchKeyHandler
+                Keys.onPressed: event => root._handleKey(event)
             }
         }
     }
 
-    Item {
+    Rectangle {
+        anchors.top: searchBarItem.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: Theme.outlineWidth
+        z: 1
+        color: Theme.outlineVariant
+        visible: root._hasQuery && !(Theme.focusRingWidth > 0 && searchInput.getActiveFocus())
+    }
+
+    ClippingRectangle {
         id: resultsContainer
         anchors.top: searchBarItem.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        clip: true
+        anchors.leftMargin: root.resultsInset
+        anchors.rightMargin: root.resultsInset
+        color: "transparent"
+        bottomLeftRadius: actionPanel.height > 0 ? 0 : root._frameClipRadius
+        bottomRightRadius: bottomLeftRadius
         height: root._resultsH
 
         Behavior on height {
@@ -465,16 +365,20 @@ FocusScope {
             NumberAnimation {
                 duration: root._resizeDuration
                 easing.type: Easing.BezierSpline
-                easing.bezierCurve: [0.2, 0.0, 0.0, 1.0, 1.0, 1.0]
+                easing.bezierCurve: Theme.expressiveCurves.standard
             }
         }
 
-        SpotlightResultsList {
+        ResultsList {
             id: resultsList
+            focusReturnTarget: searchInput
+            keyForwardTargets: [searchKeyHandler]
+            readonly property real bottomInset: Theme.spacingS
             anchors.fill: parent
+            anchors.topMargin: LauncherMetrics.resultsGap
             controller: root.controller
-            hasQuery: root._hasQuery
-            rows: root._resultRows
+            showEmptyState: root._hasQuery
+            transientSurfaceTracker: root.transientSurfaceTracker
 
             onItemRightClicked: (index, item, sceneX, sceneY) => {
                 root._showContextMenu(item, sceneX, sceneY, false);
@@ -491,46 +395,14 @@ FocusScope {
         controller: root.controller
     }
 
-    readonly property var _categoryModel: [
-        {
-            "label": I18n.tr("All"),
-            "mode": "all"
-        },
-        {
-            "label": I18n.tr("Apps"),
-            "mode": "apps"
-        },
-        {
-            "label": I18n.tr("Files"),
-            "mode": "files"
-        },
-        {
-            "label": I18n.tr("Plugins"),
-            "mode": "plugins"
-        }
-    ]
-
-    function _isCategorySelected(cat) {
-        return root.controller.searchMode === cat.mode;
-    }
-
     function _cycleCategory(reverse) {
-        let idx = 0;
-        for (let i = 0; i < _categoryModel.length; i++) {
-            if (_isCategorySelected(_categoryModel[i])) {
-                idx = i;
-                break;
-            }
-        }
-        idx = reverse ? (idx - 1 + _categoryModel.length) % _categoryModel.length : (idx + 1) % _categoryModel.length;
-        _selectCategory(idx);
+        const modes = searchInput.modes;
+        const idx = (searchInput.modeIndex + (reverse ? modes.length - 1 : 1)) % modes.length;
+        _selectMode(modes[idx].mode);
     }
 
-    function _selectCategory(index) {
-        const cat = _categoryModel[index];
-        if (!cat)
-            return;
-        root.controller.setMode(cat.mode, false);
+    function _selectMode(mode) {
+        root.controller.setMode(mode, false);
         if (root._hasQuery)
             root.controller.setSearchQuery(searchInput.text);
         root._focusSearch();

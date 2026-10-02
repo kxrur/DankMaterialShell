@@ -2,6 +2,7 @@ package providers
 
 import (
 	"fmt"
+	"github.com/AvengeMedia/DankMaterialShell/core/internal/configfrag"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,6 +35,7 @@ type NiriSection struct {
 type NiriParser struct {
 	configDir          string
 	modKey             string
+	modKeyNested       string
 	processedFiles     map[string]bool
 	bindMap            map[string]*NiriKeyBinding
 	bindOrder          []string
@@ -238,7 +240,6 @@ func isBraceAdjacentSpace(b byte) bool {
 func NewNiriParser(configDir string) *NiriParser {
 	return &NiriParser{
 		configDir:          configDir,
-		modKey:             "Super",
 		processedFiles:     make(map[string]bool),
 		bindMap:            make(map[string]*NiriKeyBinding),
 		bindOrder:          []string{},
@@ -391,13 +392,18 @@ func (p *NiriParser) processNodes(nodes []*document.Node, section *NiriSection, 
 
 func (p *NiriParser) handleInput(node *document.Node) {
 	for _, child := range node.Children {
-		if child.Name.String() != "mod-key" || len(child.Arguments) == 0 {
+		if len(child.Arguments) == 0 {
 			continue
 		}
-
-		modKey := strings.Trim(strings.TrimSpace(child.Arguments[0].String()), "\"")
-		if modKey != "" {
-			p.modKey = modKey
+		value := strings.Trim(strings.TrimSpace(child.Arguments[0].String()), "\"")
+		if value == "" {
+			continue
+		}
+		switch child.Name.String() {
+		case "mod-key":
+			p.modKey = value
+		case "mod-key-nested":
+			p.modKeyNested = value
 		}
 	}
 }
@@ -408,21 +414,17 @@ func (p *NiriParser) handleInclude(node *document.Node, section *NiriSection, ba
 	}
 
 	includePath := strings.Trim(node.Arguments[0].String(), "\"")
-	isDMSInclude := includePath == "dms/binds.kdl" || strings.HasSuffix(includePath, "/dms/binds.kdl")
+	fullPath := filepath.Join(baseDir, includePath)
+	if filepath.IsAbs(includePath) {
+		fullPath = includePath
+	}
+	isDMSInclude := strings.HasSuffix(fullPath, "/dms/binds.kdl")
 
 	p.includeCount++
 	if isDMSInclude {
 		p.dmsBindsIncluded = true
 		p.dmsIncludePos = p.includeCount
 		p.bindsBeforeDMS = len(p.bindMap)
-	}
-
-	fullPath := filepath.Join(baseDir, includePath)
-	if filepath.IsAbs(includePath) {
-		fullPath = includePath
-	}
-
-	if isDMSInclude {
 		p.dmsProcessed = true
 	}
 
@@ -482,7 +484,7 @@ func (p *NiriParser) parseKeybindNode(node *document.Node, _ string) *NiriKeyBin
 			args = append(args, arg.ValueString())
 		}
 		if actionNode.Properties != nil {
-			for _, propName := range []string{"focus", "show-pointer", "write-to-disk", "skip-confirmation", "delay-ms"} {
+			for _, propName := range []string{"focus", "show-pointer", "write-to-disk", "skip-confirmation", "delay-ms", "filter", "scope"} {
 				if val, ok := actionNode.Properties.Get(propName); ok {
 					args = append(args, propName+"="+val.String())
 				}
@@ -552,48 +554,23 @@ func (p *NiriParser) parseKeyCombo(combo string) ([]string, string) {
 type NiriParseResult struct {
 	Section            *NiriSection
 	ModKey             string
+	ModKeyNested       string
 	DMSBindsIncluded   bool
-	DMSStatus          *DMSBindsStatusInfo
+	DMSStatus          *configfrag.Status
 	ConflictingConfigs map[string]*NiriKeyBinding
 }
 
-type DMSBindsStatusInfo struct {
-	Exists          bool
-	Included        bool
-	IncludePosition int
-	TotalIncludes   int
-	BindsAfterDMS   int
-	Effective       bool
-	OverriddenBy    int
-	StatusMessage   string
+var niriBindsMessages = configfrag.Messages{
+	Missing:     "dms/binds.kdl does not exist",
+	NotIncluded: "dms/binds.kdl is not included in config.kdl",
+	Overridden:  "Some DMS binds may be overridden by config binds",
+	Active:      "DMS binds are active",
 }
 
-func (p *NiriParser) buildDMSStatus() *DMSBindsStatusInfo {
-	status := &DMSBindsStatusInfo{
-		Exists:          p.dmsBindsExists,
-		Included:        p.dmsBindsIncluded,
-		IncludePosition: p.dmsIncludePos,
-		TotalIncludes:   p.includeCount,
-		BindsAfterDMS:   p.bindsAfterDMS,
-	}
-
-	switch {
-	case !p.dmsBindsExists:
-		status.Effective = false
-		status.StatusMessage = "dms/binds.kdl does not exist"
-	case !p.dmsBindsIncluded:
-		status.Effective = false
-		status.StatusMessage = "dms/binds.kdl is not included in config.kdl"
-	case p.bindsAfterDMS > 0:
-		status.Effective = true
-		status.OverriddenBy = p.bindsAfterDMS
-		status.StatusMessage = "Some DMS binds may be overridden by config binds"
-	default:
-		status.Effective = true
-		status.StatusMessage = "DMS binds are active"
-	}
-
-	return status
+func (p *NiriParser) buildDMSStatus() *configfrag.Status {
+	scan := configfrag.IncludeScan{Count: p.includeCount, DMSPosition: p.dmsIncludePos, DMSSeen: p.dmsBindsIncluded}
+	status := configfrag.BuildStatus(scan, p.dmsBindsExists, p.bindsAfterDMS, "", false, niriBindsMessages)
+	return &status
 }
 
 func ParseNiriKeys(configDir string) (*NiriParseResult, error) {
@@ -605,6 +582,7 @@ func ParseNiriKeys(configDir string) (*NiriParseResult, error) {
 	return &NiriParseResult{
 		Section:            section,
 		ModKey:             parser.modKey,
+		ModKeyNested:       parser.modKeyNested,
 		DMSBindsIncluded:   parser.HasDMSBindsIncluded(),
 		DMSStatus:          parser.buildDMSStatus(),
 		ConflictingConfigs: parser.conflictingConfigs,

@@ -15,6 +15,11 @@ Singleton {
     property bool accountsServiceAvailable: false
     property string systemProfileImage: ""
     property string profileImage: ""
+    readonly property string profileImageUrl: {
+        if (!profileImage.startsWith("/"))
+            return profileImage;
+        return "file://" + profileImage.split("/").map(part => encodeURIComponent(part)).join("/");
+    }
     property bool settingsPortalAvailable: false
     property int systemColorScheme: 0
     property bool colorSchemeInitialized: false
@@ -180,7 +185,7 @@ Singleton {
                 } else if (errorMsg.includes("not found") || errorMsg.includes("does not exist")) {
                     userMessage = I18n.tr("Selected image file not found.");
                 } else {
-                    userMessage = I18n.tr("Failed to set profile image: %1").arg(errorMsg.split(":").pop().trim());
+                    userMessage = I18n.tr("Failed to set profile image: %1", "error message, %1 is the error detail").arg(errorMsg.split(":").pop().trim());
                 }
 
                 Quickshell.execDetached(["notify-send", "-u", "normal", "-a", "DMS", "-i", "error", I18n.tr("Profile Image Error"), userMessage]);

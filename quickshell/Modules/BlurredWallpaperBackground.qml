@@ -68,7 +68,9 @@ Variants {
             property int _freezeWaitFrames: 0
 
             readonly property var backingWindow: Window.window
-            readonly property bool renderActive: !source || liveActive || _freezeWaitFrames > 0
+            readonly property bool showsBackdrop: !source || isColorSource || loadFailed
+            readonly property bool backdropBusy: showsBackdrop && !(backdropLoader.item?.ready ?? false)
+            readonly property bool renderActive: backdropBusy || liveActive || _freezeWaitFrames > 0
             property int _settleFrames: 3
 
             readonly property int maxTextureSize: 8192
@@ -209,22 +211,13 @@ Variants {
                 }
             }
 
-            Connections {
-                target: Quickshell
-                function onScreensChanged() {
-                    root.regenerate();
-                }
-            }
+            readonly property var quickshellScreens: Quickshell.screens
+            readonly property string settingsWallpaperFillMode: SettingsData.wallpaperFillMode
+            readonly property color settingsWallpaperBackgroundColor: SettingsData.effectiveWallpaperBackgroundColor
 
-            Connections {
-                target: SettingsData
-                function onWallpaperFillModeChanged() {
-                    root.regenerate();
-                }
-                function onEffectiveWallpaperBackgroundColorChanged() {
-                    root.invalidate();
-                }
-            }
+            onQuickshellScreensChanged: regenerate()
+            onSettingsWallpaperFillModeChanged: regenerate()
+            onSettingsWallpaperBackgroundColorChanged: invalidate()
 
             Connections {
                 target: SessionData
@@ -245,24 +238,26 @@ Variants {
             }
 
             // Theme changes repaint DankBackdrop but nothing else wakes the render loop
-            Connections {
-                target: Theme
-                enabled: root.isColorSource || root.loadFailed
-                function onPrimaryChanged() {
-                    root.invalidate();
-                }
-                function onBackgroundChanged() {
-                    root.invalidate();
-                }
+            readonly property color themePrimary: Theme.primary
+            readonly property color themeBackground: Theme.background
+            readonly property bool idleShellLocked: IdleService.isShellLocked
+
+            onThemePrimaryChanged: {
+                if (!showsBackdrop)
+                    return;
+                invalidate();
             }
 
-            Connections {
-                target: IdleService
-                function onIsShellLockedChanged() {
-                    if (IdleService.isShellLocked)
-                        return;
-                    root.invalidate();
-                }
+            onThemeBackgroundChanged: {
+                if (!showsBackdrop)
+                    return;
+                invalidate();
+            }
+
+            onIdleShellLockedChanged: {
+                if (idleShellLocked)
+                    return;
+                invalidate();
             }
 
             Connections {
@@ -280,8 +275,9 @@ Variants {
             }
 
             Loader {
+                id: backdropLoader
                 anchors.fill: parent
-                active: !root.source || root.isColorSource || root.loadFailed
+                active: root.showsBackdrop
                 asynchronous: true
 
                 sourceComponent: DankBackdrop {

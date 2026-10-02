@@ -144,7 +144,7 @@ DankModal {
                             text: I18n.tr("Power Mode")
                             font.pixelSize: Theme.fontSizeLarge
                             color: Theme.surfaceText
-                            font.weight: Font.Medium
+                            font.weight: Theme.fontWeightMedium
                         }
 
                         StyledText {
@@ -158,6 +158,7 @@ DankModal {
 
                     DankActionButton {
                         iconName: "close"
+                        Accessible.name: I18n.tr("Close")
                         iconSize: Theme.iconSize - 4
                         iconColor: Theme.surfaceText
                         onClicked: root.hideDialog()
@@ -187,16 +188,16 @@ DankModal {
 
                             color: {
                                 if (isActive)
-                                    return Theme.primaryPressed;
+                                    return Theme.selectedContainer;
                                 if (isSelected)
                                     return Theme.primaryHoverLight;
                                 if (mouseArea.containsMouse)
-                                    return Theme.surfacePressed;
-                                return Theme.surfaceHover;
+                                    return Theme.foregroundColor(Theme.chipSurface, true);
+                                return Theme.floatingWindowNestedSurface;
                             }
 
-                            border.color: isActive ? Theme.primary : (isSelected ? Theme.withAlpha(Theme.primary, 0.5) : Theme.withAlpha(Theme.primary, 0))
-                            border.width: (isActive || isSelected) ? 2 : 0
+                            border.color: isSelected ? Theme.focusRingColor : Theme.outlineMedium
+                            border.width: isSelected ? Theme.outlineWidthFocused : Theme.layerOutlineWidth
 
                             // Shortcut Key Badge on Top-Right Corner
                             Rectangle {
@@ -205,16 +206,14 @@ DankModal {
                                 anchors.margins: Theme.spacingS
                                 width: 20
                                 height: 20
-                                radius: 4
-                                color: isActive ? Theme.primaryPressed : Theme.surfaceTextHover
-                                border.color: isActive ? Theme.primary : Theme.withAlpha(Theme.primary, 0)
-                                border.width: isActive ? 1 : 0
+                                radius: Theme.cornerRadiusXS
+                                color: Theme.chipSurface
 
                                 StyledText {
                                     text: (index + 1).toString()
                                     font.pixelSize: Theme.fontSizeSmall
-                                    font.weight: Font.Bold
-                                    color: isActive ? Theme.primary : Theme.surfaceTextMedium
+                                    font.weight: Theme.fontWeightMedium
+                                    color: isActive ? Theme.accentOnSelectedContainer : Theme.surfaceTextMedium
                                     anchors.centerIn: parent
                                 }
                             }
@@ -226,15 +225,16 @@ DankModal {
                                 DankIcon {
                                     name: Theme.getPowerProfileIcon(modelData)
                                     size: Theme.iconSize + 16
-                                    color: isActive ? Theme.primary : Theme.surfaceText
+                                    color: isActive ? Theme.accentOnSelectedContainer : Theme.surfaceText
+                                    filled: isActive
                                     anchors.horizontalCenter: parent.horizontalCenter
                                 }
 
                                 StyledText {
                                     text: Theme.getPowerProfileLabel(modelData)
                                     font.pixelSize: Theme.fontSizeMedium
-                                    color: isActive ? Theme.primary : Theme.surfaceText
-                                    font.weight: Font.Medium
+                                    color: isActive ? Theme.onSelectedContainer : Theme.surfaceText
+                                    font.weight: Theme.fontWeightMedium
                                     anchors.horizontalCenter: parent.horizontalCenter
                                 }
                             }

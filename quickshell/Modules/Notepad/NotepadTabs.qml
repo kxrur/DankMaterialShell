@@ -140,7 +140,7 @@ Column {
                                 id: tabRect
                                 anchors.fill: parent
                                 radius: Theme.cornerRadius
-                                color: isActive ? Theme.primaryPressed : isHovered ? Theme.primaryHoverLight : Theme.withAlpha(Theme.primaryPressed, 0)
+                                color: isActive ? Theme.selectedContainer : isHovered ? Theme.primaryHoverLight : Theme.withAlpha(Theme.primaryPressed, 0)
                                 border.width: isActive || dragging ? 0 : 1
                                 border.color: dragging ? Theme.primary : Theme.outlineMedium
                                 clip: true
@@ -164,8 +164,8 @@ Column {
                                             return prefix + (modelData.title || "Untitled");
                                         }
                                         font.pixelSize: Theme.fontSizeSmall
-                                        color: isActive ? Theme.primary : Theme.surfaceText
-                                        font.weight: isActive ? Font.Medium : Font.Normal
+                                        color: isActive ? Theme.onSelectedContainer : Theme.surfaceText
+                                        font.weight: Theme.fontWeightMedium
                                         elide: Text.ElideMiddle
                                         maximumLineCount: 1
                                         wrapMode: Text.NoWrap
@@ -179,7 +179,7 @@ Column {
                                         width: parent.width
                                         height: parent.height
                                         font.pixelSize: Theme.fontSizeSmall
-                                        font.weight: Font.Medium
+                                        font.weight: Theme.fontWeightMedium
                                         textColor: Theme.primary
                                         backgroundColor: "transparent"
                                         borderWidth: 0
@@ -222,6 +222,8 @@ Column {
 
                                     Rectangle {
                                         id: tabCloseButton
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: I18n.tr("Close")
                                         width: 20
                                         height: 20
                                         radius: Theme.cornerRadius
@@ -269,13 +271,6 @@ Column {
                             onDoubleClicked: {
                                 root.tabSwitched(index);
                                 root.editingIndex = index;
-                            }
-
-                            onExited: tabTooltip.hide()
-
-                            onContainsMouseChanged: {
-                                if (containsMouse && tabText.truncated)
-                                    tabTooltip.show(modelData.title || "Untitled", delegateItem, 0, 0, "bottom");
                             }
 
                             onPressed: mouse => {
@@ -342,6 +337,12 @@ Column {
                                 }
                             }
                         }
+
+                        DankTooltipHost {
+                            text: tabText.truncated ? (delegateItem.modelData.title || "Untitled") : ""
+                            target: delegateItem
+                            hoverArea: tabMouseArea
+                        }
                     }
                 }
             }
@@ -352,13 +353,10 @@ Column {
             width: 32
             height: 32
             iconName: "add"
+            tooltipText: I18n.tr("New tab")
             iconSize: Theme.iconSize - 4
             iconColor: Theme.surfaceText
             onClicked: root.newTabRequested()
         }
-    }
-
-    DankTooltipV2 {
-        id: tabTooltip
     }
 }

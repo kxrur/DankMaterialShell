@@ -43,47 +43,13 @@ DankFloatingWindow {
             }
         }
 
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: headerRow.height + Theme.spacingM
-            onPressed: windowControls.tryStartMove()
-            onDoubleClicked: windowControls.tryToggleMaximize()
-        }
-
-        Item {
+        DankWindowHeader {
             id: headerRow
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: Theme.spacingM
-            height: Math.round(Theme.fontSizeMedium * 2.85)
-
-            Row {
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.spacingXS
-
-                DankActionButton {
-                    visible: windowControls.canMaximize
-                    iconName: root.maximized ? "fullscreen_exit" : "fullscreen"
-                    iconSize: Theme.iconSize - 4
-                    iconColor: Theme.surfaceText
-                    onClicked: windowControls.tryToggleMaximize()
-                }
-
-                DankActionButton {
-                    iconName: "close"
-                    iconSize: Theme.iconSize - 4
-                    iconColor: Theme.surfaceText
-                    onClicked: root.dismiss()
-
-                    DankTooltip {
-                        text: I18n.tr("Close")
-                    }
-                }
-            }
+            controls: windowControls
+            onCloseRequested: root.dismiss()
         }
 
         DankFlickable {
@@ -91,7 +57,6 @@ DankFloatingWindow {
             anchors.right: parent.right
             anchors.top: headerRow.bottom
             anchors.bottom: footerRow.top
-            anchors.topMargin: Theme.spacingS
             clip: true
             contentHeight: mainColumn.height + Theme.spacingL * 2
             contentWidth: width
@@ -110,6 +75,8 @@ DankFloatingWindow {
             anchors.bottom: parent.bottom
             height: Math.round(Theme.fontSizeMedium * 4.5)
             color: Theme.floatingWindowNestedSurface
+            border.width: Theme.layerOutlineWidth
+            border.color: Theme.outlineMedium
 
             Rectangle {
                 anchors.top: parent.top
@@ -124,11 +91,14 @@ DankFloatingWindow {
                 spacing: Theme.spacingM
 
                 DankButton {
-                    text: I18n.tr("Open in Browser")
-                    iconName: "open_in_new"
-                    backgroundColor: Theme.surfaceContainerHighest
+                    text: I18n.tr("Release notes")
+                    iconName: "auto_awesome"
+                    backgroundColor: Theme.chipSurface
                     textColor: Theme.surfaceText
-                    onClicked: Qt.openUrlExternally("https://danklinux.com/blog/v1-6-release")
+                    onClicked: {
+                        root.dismiss();
+                        PopoutService.openSettingsWithTab("updater_changelog");
+                    }
                 }
 
                 DankButton {

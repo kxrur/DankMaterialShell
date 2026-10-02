@@ -1,15 +1,23 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import Quickshell
 import qs.Common
+import qs.Modules.ControlCenter
+import qs.Modules.ControlCenter.Widgets
+import qs.Modules.DankBar.Widgets
+import qs.Modules.DankDash
+import "../utils/widgets.js" as WidgetUtils
+import "../../../Common/QmlUtils.js" as QmlUtils
 import qs.Services
+import qs.Widgets
 
 Item {
     id: root
 
     property int widgetIndex: -1
-    property real anchorX: 0
-    property real anchorY: 0
-    property real anchorWidth: 0
-    property real anchorHeight: 0
+    property var transientSurfaceTracker: null
+    property Item _anchor: null
 
     readonly property var widgetData: {
         if (widgetIndex < 0)
@@ -17,61 +25,126 @@ Item {
         const widgets = SettingsData.controlCenterWidgets || [];
         return widgets[widgetIndex] || null;
     }
+    readonly property string widgetId: String(widgetData?.id ?? "")
+    readonly property bool isPlugin: widgetId.startsWith("plugin_")
+    readonly property bool isDisk: widgetId === "diskUsage"
+    readonly property bool isIdleInhibitor: widgetId === "idleInhibitor"
+    readonly property bool isUser: widgetId === "user"
 
-    visible: widgetIndex >= 0
-    z: 10000
+    visible: widgetIndex >= 0 || contextMenu.renderActive
 
     function open(index, data, anchorItem) {
-        const pos = anchorItem.mapToItem(root, 0, 0);
-        anchorX = pos.x;
-        anchorY = pos.y;
-        anchorWidth = anchorItem.width;
-        anchorHeight = anchorItem.height;
         widgetIndex = index;
+        _anchor = anchorItem;
+        // Placement needs the final menu height, which settles after widgetIndex propagates.
+        Qt.callLater(() => {
+            const window = root.QsWindow.window;
+            const pos = QmlUtils.screenPointOf(window, anchorItem, 0, 0);
+            if (root.widgetIndex !== index || !pos)
+                return;
+            const screen = window.screen;
+            const x = pos.x;
+            const y = pos.y;
+            const menuX = I18n.isRtl ? x : x + anchorItem.width - contextMenu.effectiveMenuWidth;
+            const aboveY = () => y - contextMenu.effectiveMenuHeight - Theme.spacingS;
+            if (aboveY() < Theme.spacingS) {
+                contextMenu.open(screen, menuX, y + anchorItem.height + Theme.spacingS, false);
+                return;
+            }
+            contextMenu.open(screen, menuX, aboveY(), false);
+            contextMenu.anchorY = Qt.binding(aboveY);
+        });
     }
 
     function close() {
-        widgetIndex = -1;
-    }
-
-    function persistShowMountPath(show) {
-        const widgets = (SettingsData.controlCenterWidgets || []).slice();
-        if (root.widgetIndex < 0 || root.widgetIndex >= widgets.length)
+        if (!contextMenu.renderActive) {
+            widgetIndex = -1;
+            _anchor = null;
             return;
-        const updated = Object.assign({}, widgets[root.widgetIndex]);
-        updated.showMountPath = show;
-        widgets[root.widgetIndex] = updated;
-        SettingsData.set("controlCenterWidgets", widgets);
+        }
+        contextMenu.hide();
     }
 
-    MouseArea {
-        anchors.fill: parent
-        enabled: root.visible
-        onClicked: root.close()
+    function persistOption(key, value) {
+        WidgetUtils.setOption(widgetIndex, key, value);
     }
 
-    DiskUsageWidgetConfigMenu {
-        id: diskMenu
-        visible: root.visible && root.widgetData?.id === "diskUsage"
-        widgetData: root.widgetData
+    DankContextMenu {
+        id: contextMenu
+        layerNamespace: "dms:control-center-widget-options"
+        minMenuWidth: CcMetrics.configMenuWidth
+        customContentWidth: CcMetrics.configMenuWidth
+        keyboardNavigable: true
+        transientSurfaceTracker: root.transientSurfaceTracker
 
-        x: {
-            let nx = root.anchorX + root.anchorWidth - width;
-            const maxX = root.width - width - Theme.spacingS;
-            const minX = Theme.spacingS;
-            if (nx < minX)
-                nx = minX;
-            if (nx > maxX)
-                nx = maxX;
-            return nx;
-        }
-        y: {
-            let ny = root.anchorY - height - Theme.spacingS;
-            if (ny < Theme.spacingS)
-                ny = root.anchorY + root.anchorHeight + Theme.spacingS;
-            return ny;
+        onOpenStateChanged: {
+            if (openState)
+                return;
+            root.widgetIndex = -1;
+            if (root._anchor?.visible && root._anchor.enabled)
+                root._anchor.forceActiveFocus();
+            root._anchor = null;
         }
 
-        onShowMountPathChanged: show => root.persistShowMountPath(show)
+        customContent: Component {
+            CcGroup {
+                CcListRow {
+                    visible: root.isPlugin
+                    iconName: "settings"
+                    title: I18n.tr("Plugin settings")
+                    clickable: true
+                    onClicked: {
+                        PopoutService.openSettingsWithTab(SettingsTabs.pluginPrefix + root.widgetId.replace("plugin_", ""));
+                        root.close();
+                    }
+                }
+
+                CcToggleRow {
+                    visible: root.isUser
+                    text: I18n.tr("Background")
+                    checked: root.widgetData?.background === true
+                    onToggled: checked => root.persistOption("background", checked)
+                }
+
+                Repeater {
+                    model: root.isUser ? DashRegistry.sheetOptionSpecs("user") : []
+
+                    CcToggleRow {
+                        required property var modelData
+
+                        text: modelData.text
+                        checked: DashRegistry.optionValue(modelData, root.widgetData?.[modelData.key])
+                        onToggled: checked => root.persistOption(modelData.key, checked)
+                    }
+                }
+
+                CcToggleRow {
+                    visible: root.isDisk
+                    text: I18n.tr("Show mount path", "toggle in control center disk usage widget to turn mount path display on or off")
+                    checked: root.widgetData?.showMountPath !== false
+                    onToggled: checked => root.persistOption("showMountPath", checked)
+                }
+
+                CcListRow {
+                    visible: root.isIdleInhibitor
+                    iconName: "timer"
+                    title: I18n.tr("Duration")
+                    body: DankDropdown {
+                        readonly property var presets: IdleInhibitPresets.presetOptions
+
+                        compactMode: true
+                        dropdownWidth: parent.width
+                        transientSurfaceTracker: contextMenu.transientSurfaceTracker
+                        currentValue: presets.find(p => p.minutes === (root.widgetData?.durationMinutes ?? 0))?.label ?? ""
+                        options: presets.map(p => p.label)
+                        onValueChanged: value => {
+                            const preset = presets.find(p => p.label === value);
+                            if (preset)
+                                root.persistOption("durationMinutes", preset.minutes);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

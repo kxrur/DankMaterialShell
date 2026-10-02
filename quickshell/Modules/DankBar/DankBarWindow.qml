@@ -2,7 +2,9 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Common
+import qs.Modules.DankIsland
 import qs.Services
+import qs.Widgets
 
 PanelWindow {
     id: barWindow
@@ -19,6 +21,10 @@ PanelWindow {
     readonly property bool isVertical: body.isVertical
     readonly property int barPos: body.barPos
     readonly property bool barRevealed: body.barRevealed
+    readonly property bool isIsland: body.isIsland
+    readonly property var islandHost: body.islandHost
+    readonly property var leadingSectionRect: body.leadingSectionRect
+    readonly property var trailingSectionRect: body.trailingSectionRect
 
     property alias controlCenterButtonRef: body.controlCenterButtonRef
     property alias clockButtonRef: body.clockButtonRef
@@ -49,14 +55,36 @@ PanelWindow {
         return body.containsGlobalPoint(gx, gy, padding);
     }
 
-    readonly property bool usesOverlayLayer: CompositorService.framePeerSurfacesUseOverlayForScreen(barWindow.screen) || (barConfig?.useOverlayLayer ?? false)
-    readonly property var dBarLayer: LayerShell.fromEnv("DMS_DANKBAR_LAYER", barWindow.usesOverlayLayer ? WlrLayer.Overlay : WlrLayer.Top)
+    readonly property bool usesOverlayLayer: CompositorService.framePeerSurfacesUseOverlayForScreen(barWindow.screen) || (isIsland ? LayerShell.envUsesOverlay("DMS_DANKISLAND_LAYER", SettingsData.islandSetting(barConfig, "islandUseOverlayLayer")) : (barConfig?.useOverlayLayer ?? false))
+    // A hosted sheet must paint over Top-layer surfaces on its edge until it has sprung back, the same as the frame does.
+    readonly property int dBarLayer: LayerShell.fromEnv(isIsland ? "DMS_DANKISLAND_LAYER" : "DMS_DANKBAR_LAYER", barWindow.usesOverlayLayer || (!isIsland && islandChrome.sheetOut) ? WlrLayer.Overlay : WlrLayer.Top)
 
     screen: modelData
+    readonly property var layoutInstance: body.layoutInstance
+    readonly property bool manualPlacement: ShellLayout.forScreen(screen)?.manualPlacement ?? false
+    margins.top: manualPlacement ? layoutInstance?.margins.top ?? 0 : 0
+    margins.bottom: manualPlacement ? layoutInstance?.margins.bottom ?? 0 : 0
+    margins.left: manualPlacement ? layoutInstance?.margins.left ?? 0 : 0
+    margins.right: manualPlacement ? layoutInstance?.margins.right ?? 0 : 0
+
+    EdgeExclusion {
+        screen: barWindow.screen
+        edge: barWindow.layoutInstance?.edge ?? "top"
+        exclusionSize: barWindow.layoutInstance?.exclusionSize ?? 0
+    }
+
     color: "transparent"
 
     WlrLayershell.layer: dBarLayer
-    WlrLayershell.namespace: "dms:bar"
+    WlrLayershell.namespace: isIsland ? "dms:dankisland" : "dms:bar"
+    WlrLayershell.keyboardFocus: islandChrome.keyboardFocusPolicy
+
+    IslandHostChrome {
+        id: islandChrome
+
+        window: barWindow
+        host: barWindow.islandHost
+    }
 
     anchors.top: !isVertical ? (barPos === SettingsData.Position.Top) : true
     anchors.bottom: !isVertical ? (barPos === SettingsData.Position.Bottom) : true
@@ -65,7 +93,7 @@ PanelWindow {
 
     implicitHeight: body.surfaceImplicitHeight
     implicitWidth: body.surfaceImplicitWidth
-    exclusiveZone: body.surfaceExclusiveZone
+    exclusiveZone: manualPlacement ? -1 : body.surfaceExclusiveZone
 
     BackgroundEffect.blurRegion: BlurService.enabled ? body.blurRegion : null
 
@@ -83,11 +111,19 @@ PanelWindow {
         enabled: SessionService.idleInhibited || IdleService.externalInhibitActive
     }
 
+    readonly property bool sectionMasked: body.clickThroughEnabled || (isIsland && !(islandHost?.inputSuspended ?? false))
+
     mask: Region {
-        item: body.clickThroughEnabled ? null : body.inputMaskItem
+        item: body.clickThroughEnabled || (isIsland && !body.islandBandInteractive) ? null : body.inputMaskItem
+
+        // Item-bound: a mapToItem snapshot froze mid-churn on output reconnect, leaving the trailing
+        // section unclickable (#3594). barRevealed: same ancestor-transform caveat as the island regions.
+        Region {
+            item: barWindow.sectionMasked && body.barRevealed ? body._leftSection : null
+        }
 
         Region {
-            readonly property var r: body.clickThroughEnabled ? body.sectionRect(body._leftSection, false, body._revealProgress) : {
+            readonly property var r: barWindow.sectionMasked ? body.centerSectionRect : {
                 "x": 0,
                 "y": 0,
                 "w": 0,
@@ -100,29 +136,7 @@ PanelWindow {
         }
 
         Region {
-            readonly property var r: body.clickThroughEnabled ? body.sectionRect(body._centerSection, true, body._revealProgress) : {
-                "x": 0,
-                "y": 0,
-                "w": 0,
-                "h": 0
-            }
-            x: r.x
-            y: r.y
-            width: r.w
-            height: r.h
-        }
-
-        Region {
-            readonly property var r: body.clickThroughEnabled ? body.sectionRect(body._rightSection, false, body._revealProgress) : {
-                "x": 0,
-                "y": 0,
-                "w": 0,
-                "h": 0
-            }
-            x: r.x
-            y: r.y
-            width: r.w
-            height: r.h
+            item: barWindow.sectionMasked && body.barRevealed ? body._rightSection : null
         }
 
         Region {
@@ -131,6 +145,15 @@ PanelWindow {
             y: active ? body.inputMaskItem.y : 0
             width: active ? body.inputMaskItem.width : 0
             height: active ? body.inputMaskItem.height : 0
+        }
+
+        // The slide transform lives on an ancestor, so a hidden bar's pill would otherwise keep its input hole in place.
+        Region {
+            item: body.barRevealed ? islandChrome.maskItem : null
+        }
+
+        Region {
+            item: body.barRevealed ? islandChrome.fittsStripItem : null
         }
     }
 

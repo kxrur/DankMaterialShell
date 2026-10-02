@@ -1,82 +1,29 @@
 import QtQuick
 import qs.Common
 import qs.Widgets
-import qs.Modals.Clipboard
 
 Item {
     id: header
 
-    property int recentsCount: 0
-    property int savedCount: 0
-    property bool showKeyboardHints: false
-    property string activeTab: "recents"
-    property int pinnedCount: 0
-    property bool clearsFilteredOnly: false
+    required property var modal
+    readonly property bool savedTab: modal.activeTab === "saved"
 
-    signal keyboardHintsToggled
-    signal clearAllClicked
-    signal closeClicked
-    signal tabChanged(string tabName)
+    implicitHeight: actions.implicitHeight
 
-    height: ClipboardConstants.headerHeight
-
-    Row {
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Theme.spacingM
-
-        DankIcon {
-            name: "content_paste"
-            size: Theme.iconSize
-            color: Theme.primary
-            anchors.verticalCenter: parent.verticalCenter
-        }
-
-        StyledText {
-            text: (header.activeTab === "saved" ? I18n.tr("Clipboard Saved") : I18n.tr("Clipboard History")) + ` (${header.activeTab === "saved" ? header.savedCount : header.recentsCount})`
-            font.pixelSize: Theme.fontSizeLarge
-            color: Theme.surfaceText
-            font.weight: Font.Medium
-            anchors.verticalCenter: parent.verticalCenter
-        }
+    ClipboardActions {
+        id: actions
+        anchors.fill: parent
+        modal: header.modal
     }
 
-    Row {
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Theme.spacingS
-
-        DankActionButton {
-            iconName: "push_pin"
-            iconSize: Theme.iconSize - 4
-            iconColor: header.activeTab === "saved" ? Theme.primary : Theme.surfaceText
-            backgroundColor: header.activeTab === "saved" ? Theme.primarySelected : Theme.withAlpha(Theme.primarySelected, 0)
-            visible: header.pinnedCount > 0 || header.activeTab === "saved"
-            tooltipText: header.activeTab === "saved" ? I18n.tr("Recent") : I18n.tr("Saved")
-            onClicked: tabChanged(header.activeTab === "saved" ? "recents" : "saved")
-        }
-
-        DankActionButton {
-            iconName: "info"
-            iconSize: Theme.iconSize - 4
-            iconColor: showKeyboardHints ? Theme.primary : Theme.surfaceText
-            tooltipText: I18n.tr("Keyboard Shortcuts")
-            onClicked: keyboardHintsToggled()
-        }
-
-        DankActionButton {
-            iconName: "delete_sweep"
-            iconSize: Theme.iconSize
-            iconColor: Theme.surfaceText
-            tooltipText: header.clearsFilteredOnly ? I18n.tr("Clear Filtered", "clipboard modal: clear button tooltip while a search filter is active") : I18n.tr("Clear All")
-            onClicked: clearAllClicked()
-        }
-
-        DankActionButton {
-            iconName: "close"
-            iconSize: Theme.iconSize - 4
-            iconColor: Theme.surfaceText
-            onClicked: closeClicked()
-        }
+    StyledText {
+        anchors.centerIn: parent
+        width: Math.max(0, parent.width - 2 * (actions.sideWidth + Theme.spacingM))
+        text: (header.savedTab ? I18n.tr("Clipboard Saved") : I18n.tr("Clipboard History")) + ` (${header.savedTab ? header.modal.pinnedEntries.length : header.modal.unpinnedEntries.length})`
+        font.pixelSize: Theme.fontSizeMedium
+        font.weight: Theme.fontWeightMedium
+        color: Theme.surfaceText
+        horizontalAlignment: Text.AlignHCenter
+        elide: Text.ElideRight
     }
 }

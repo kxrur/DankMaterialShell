@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import qs.Common
 import qs.Services
@@ -47,6 +48,11 @@ Singleton {
         onTriggered: root.sendPasteKeystroke()
     }
 
+    Process {
+        id: pasteCommand
+        onExited: pasteTimer.start()
+    }
+
     Connections {
         target: DMSService
         function onIsConnectedChanged() {
@@ -74,12 +80,17 @@ Singleton {
         return terminalAppIds.includes(appId) || appId.endsWith("term") || appId.includes("terminal");
     }
 
+    function pasteAfterCommand(command) {
+        pasteCommand.command = command;
+        pasteCommand.running = true;
+    }
+
     function sendPasteKeystroke() {
         DMSService.sendRequest("clipboard.sendPaste", {
             "shift": isTerminalFocused()
         }, function (response) {
             if (response.error) {
-                ToastService.showError(I18n.tr("Paste failed: %1").arg(response.error));
+                ToastService.showError(I18n.tr("Paste failed: %1", "clipboard error toast, %1 is the error message").arg(response.error));
             }
         });
     }
@@ -200,6 +211,7 @@ Singleton {
         internalEntries = [];
         clipboardEntries = [];
         unpinnedEntries = [];
+        pinnedEntries = [];
     }
 
     function copyEntry(entry, closeCallback, textOnly) {
@@ -334,6 +346,33 @@ Singleton {
         });
     }
 
+    function editEntry(entry, text, callback) {
+        if (!entry || typeof entry.id !== "number") {
+            if (callback) {
+                callback({
+                    "error": "Invalid entry"
+                });
+            }
+            return;
+        }
+        DMSService.sendRequest("clipboard.editEntry", {
+            "id": entry.id,
+            "text": text
+        }, function (response) {
+            if (response.error) {
+                log.warn("Failed to edit entry:", response.error);
+                if (callback) {
+                    callback(response);
+                }
+                return;
+            }
+            refresh();
+            if (callback) {
+                callback(response);
+            }
+        });
+    }
+
     function clearAll() {
         const hasPinned = pinnedCount > 0;
         const savedCount = pinnedCount;
@@ -345,7 +384,7 @@ Singleton {
             refresh();
             historyCleared();
             if (hasPinned) {
-                ToastService.showInfo(I18n.tr("History cleared. %1 pinned entries kept.").arg(savedCount));
+                ToastService.showInfo(I18n.tr("History cleared. %1 pinned entries kept.", "clipboard toast, %1 is a count of pinned entries").arg(savedCount));
             }
         });
     }
@@ -369,6 +408,36 @@ Singleton {
 
     function getEntryPreview(entry) {
         return entry.preview || "";
+    }
+
+    function isTextMimeType(mimeType) {
+        if (!mimeType || mimeType.startsWith("text/plain")) {
+            return true;
+        }
+        return mimeType === "UTF8_STRING" || mimeType === "STRING" || mimeType === "TEXT";
+    }
+
+    function canEditEntry(entry) {
+        return !!entry && !(entry.isImage ?? false) && isTextMimeType(entry.mimeType);
+    }
+
+    function isImageMimeType(mimeType) {
+        return (mimeType || "").toString().toLowerCase().startsWith("image/");
+    }
+
+    function canPreviewEntry(entry) {
+        return !!entry && !!(entry.isImage ?? false) && typeof entry.id === "number" && isImageMimeType(entry.mimeType);
+    }
+
+    function imageDataUrl(data, mimeType) {
+        const rawData = (data || "").toString();
+        if (rawData.length === 0)
+            return "";
+        if (rawData.startsWith("data:"))
+            return rawData.startsWith("data:image/") ? rawData : "";
+        if (!isImageMimeType(mimeType))
+            return "";
+        return "data:" + mimeType + ";base64," + rawData;
     }
 
     function getEntryType(entry) {

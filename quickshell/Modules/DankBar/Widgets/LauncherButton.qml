@@ -9,22 +9,27 @@ BasePill {
 
     property bool isActive: false
     property var hyprlandOverviewLoader: null
+    property var widgetData: null
+
+    function opt(key) {
+        return SettingsData.widgetOption("launcherButton", root.widgetData, key);
+    }
 
     content: Component {
         Item {
-            implicitWidth: root.widgetThickness - root.horizontalPadding * 2
-            implicitHeight: root.widgetThickness - root.horizontalPadding * 2
+            implicitWidth: root.contentThickness
+            implicitHeight: root.contentThickness
 
             LauncherLogo {
                 anchors.centerIn: parent
-                mode: SettingsData.launcherLogoMode
-                size: Theme.barIconSize(root.barThickness, SettingsData.launcherLogoSizeOffset, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
+                mode: root.opt("launcherLogoMode")
+                size: Theme.barIconSize(root.barThickness, root.opt("launcherLogoSizeOffset"), root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
                 appsIconSize: Theme.barIconSize(root.barThickness, -4, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
                 appsIconColor: Theme.widgetIconColor
-                colorOverride: Theme.effectiveLogoColor
-                brightness: SettingsData.launcherLogoBrightness
-                contrast: SettingsData.launcherLogoContrast
-                customPath: SettingsData.launcherLogoCustomPath
+                colorOverride: root.opt("launcherLogoColorOverride")
+                brightness: root.opt("launcherLogoBrightness")
+                contrast: root.opt("launcherLogoContrast")
+                customPath: root.opt("launcherLogoCustomPath")
             }
         }
     }

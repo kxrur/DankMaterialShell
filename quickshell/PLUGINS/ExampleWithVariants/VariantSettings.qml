@@ -19,7 +19,7 @@ PluginSettings {
         width: parent.width
         text: "Variant Manager"
         font.pixelSize: Theme.fontSizeLarge
-        font.weight: Font.Bold
+        font.weight: Theme.fontWeightMedium
         color: Theme.surfaceText
     }
 
@@ -35,7 +35,7 @@ PluginSettings {
         width: parent.width
         height: addVariantColumn.implicitHeight + Theme.spacingL * 2
         radius: Theme.cornerRadius
-        color: Theme.surfaceContainerHigh
+        color: Theme.chipSurface
 
         Column {
             id: addVariantColumn
@@ -46,7 +46,7 @@ PluginSettings {
             StyledText {
                 text: "Add New Variant"
                 font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
             }
 
@@ -135,7 +135,7 @@ PluginSettings {
         width: parent.width
         height: Math.max(200, variantsColumn.implicitHeight + Theme.spacingL * 2)
         radius: Theme.cornerRadius
-        color: Theme.surfaceContainerHigh
+        color: Theme.chipSurface
 
         Column {
             id: variantsColumn
@@ -146,7 +146,7 @@ PluginSettings {
             StyledText {
                 text: "Existing Variants"
                 font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
             }
 
@@ -165,7 +165,7 @@ PluginSettings {
                     width: ListView.view.width
                     height: variantRow.implicitHeight + Theme.spacingM * 2
                     radius: Theme.cornerRadius
-                    color: variantMouseArea.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainer
+                    color: variantMouseArea.containsMouse ? Theme.chipSurfaceNested : Theme.chipSurface
 
                     Row {
                         id: variantRow
@@ -212,6 +212,8 @@ PluginSettings {
                         }
 
                         Rectangle {
+                            Accessible.role: Accessible.Button
+                            Accessible.name: I18n.tr("Delete")
                             id: deleteButton
                             width: 32
                             height: 32
@@ -262,7 +264,7 @@ PluginSettings {
         width: parent.width
         height: instructionsColumn.implicitHeight + Theme.spacingL * 2
         radius: Theme.cornerRadius
-        color: Theme.surface
+        color: Theme.hostSurface
 
         Column {
             id: instructionsColumn
@@ -283,7 +285,7 @@ PluginSettings {
                 StyledText {
                     text: "How to Use Variants"
                     font.pixelSize: Theme.fontSizeMedium
-                    font.weight: Font.Medium
+                    font.weight: Theme.fontWeightMedium
                     color: Theme.surfaceText
                     anchors.verticalCenter: parent.verticalCenter
                 }

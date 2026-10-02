@@ -1,7 +1,9 @@
 .pragma library
-
-    .import "./SettingsSpec.js" as SpecModule
-    .import "./SpecUtil.js" as Util
+.import "./SettingsSpec.js" as SpecModule
+.import "../../DankCommon/Common/settings/SpecUtil.js" as Util
+.import "../../DankCommon/Common/Shape.js" as Shape
+.import "./BarWidgetDefaults.js" as WidgetDefaults
+.import "./DockConfig.js" as DockConfig
 
 var PIN_KEYS = ["brightnessDevicePins", "wifiNetworkPins", "bluetoothDevicePins", "audioInputDevicePins", "audioOutputDevicePins"];
 
@@ -13,6 +15,11 @@ var SESSION_BACKED_PLUGIN_IDS = ["dankNotepadModule"];
 var STALE_WIDGET_KEYS = ["desktopClockEnabled", "desktopClockStyle", "desktopClockTransparency", "desktopClockColorMode", "desktopClockCustomColor", "desktopClockShowDate", "desktopClockShowAnalogNumbers", "desktopClockShowAnalogSeconds", "desktopClockX", "desktopClockY", "desktopClockWidth", "desktopClockHeight", "desktopClockDisplayPreferences", "systemMonitorEnabled", "systemMonitorShowHeader", "systemMonitorTransparency", "systemMonitorColorMode", "systemMonitorCustomColor", "systemMonitorShowCpu", "systemMonitorShowCpuGraph", "systemMonitorShowCpuTemp", "systemMonitorShowGpuTemp", "systemMonitorGpuPciId", "systemMonitorShowMemory", "systemMonitorShowMemoryGraph", "systemMonitorShowNetwork", "systemMonitorShowNetworkGraph", "systemMonitorShowDisk", "systemMonitorShowTopProcesses", "systemMonitorTopProcessCount", "systemMonitorTopProcessSortBy", "systemMonitorGraphInterval", "systemMonitorLayoutMode", "systemMonitorX", "systemMonitorY", "systemMonitorWidth", "systemMonitorHeight", "systemMonitorDisplayPreferences", "systemMonitorVariants", "desktopWidgetPositions"];
 
 var BAR_WIDGET_LIST_KEYS = ["leftWidgets", "centerWidgets", "rightWidgets"];
+var CC_HEADER_IDS = ["userCard", "quickActions", "header"];
+var CC_ACTION_TILE_IDS = ["settings", "lock", "power"];
+var CC_USER_KEYS = ["w", "h", "col", "row", "hostname", "compositor", "uptime", "badge", "background"];
+
+var REMOVED_KEYS_V21 = ["showBattery", "showCapsLockIndicator", "showClipboard", "showClock", "showControlCenterButton", "showCpuUsage", "showFocusedWindow", "showLauncherButton", "showMemUsage", "showMusic", "showNotificationButton", "showPrivacyButton", "showSystemTray", "showWeather", "showWorkspaceSwitcher", "hideBrightnessSlider", "updaterHideWidget", "workspaceScrolling", "appLauncherViewMode", "spotlightModalViewMode", "audioDeviceScrollVolumeEnabled", "desktopClockX", "desktopClockY", "desktopClockWidth", "desktopClockHeight", "desktopClockDisplayPreferences", "systemMonitorX", "systemMonitorY", "systemMonitorWidth", "systemMonitorHeight", "systemMonitorDisplayPreferences", "systemMonitorVariants"];
 
 // v18: the shell-wide island settings became per-bar-config island* keys
 var ISLAND_KEY_MOVES = {
@@ -62,10 +69,16 @@ function migrateBatteryPillStyle(target) {
         target.batteryStyle = "solid";
 }
 
+function strengthFromWindowRadius(radius) {
+    return Shape.strengthFromRadius((radius ?? Shape.corners.l) * Shape.corners.m / Shape.corners.l);
+}
+
 function withoutInstancePositions(instances) {
-    if (!Array.isArray(instances)) return instances;
+    if (!Array.isArray(instances))
+        return instances;
     return instances.map(function (inst) {
-        if (!inst || !inst.positions) return inst;
+        if (!inst || !inst.positions)
+            return inst;
         var copy = Object.assign({}, inst);
         delete copy.positions;
         return copy;
@@ -73,7 +86,8 @@ function withoutInstancePositions(instances) {
 }
 
 function withoutSessionBackedPluginState(pluginSettings) {
-    if (!pluginSettings) return pluginSettings;
+    if (!pluginSettings)
+        return pluginSettings;
     var copy = Object.assign({}, pluginSettings);
     for (var i = 0; i < SESSION_BACKED_PLUGIN_IDS.length; i++) {
         delete copy[SESSION_BACKED_PLUGIN_IDS[i]];
@@ -82,12 +96,14 @@ function withoutSessionBackedPluginState(pluginSettings) {
 }
 
 function extractSessionPayload(obj) {
-    if (!obj) return null;
+    if (!obj)
+        return null;
 
     var payload = {};
     for (var i = 0; i < SESSION_MOVED_KEYS.length; i++) {
         var key = SESSION_MOVED_KEYS[i];
-        if (key in obj) payload[key] = obj[key];
+        if (key in obj)
+            payload[key] = obj[key];
     }
 
     var positions = {};
@@ -98,7 +114,8 @@ function extractSessionPayload(obj) {
             positions[inst.id] = inst.positions;
         }
     }
-    if (Object.keys(positions).length > 0) payload.desktopWidgetInstancePositions = positions;
+    if (Object.keys(positions).length > 0)
+        payload.desktopWidgetInstancePositions = positions;
 
     var pluginState = {};
     for (var i = 0; i < SESSION_BACKED_PLUGIN_IDS.length; i++) {
@@ -107,53 +124,69 @@ function extractSessionPayload(obj) {
             pluginState[id] = obj.builtInPluginSettings[id];
         }
     }
-    if (Object.keys(pluginState).length > 0) payload.builtInPluginState = pluginState;
+    if (Object.keys(pluginState).length > 0)
+        payload.builtInPluginState = pluginState;
 
     return Object.keys(payload).length > 0 ? payload : null;
 }
 
 function extractCachePayload(obj) {
-    if (!obj) return null;
+    if (!obj)
+        return null;
 
     var payload = {};
     for (var i = 0; i < CACHE_MOVED_KEYS.length; i++) {
         var key = CACHE_MOVED_KEYS[i];
-        if (obj[key] && Object.keys(obj[key]).length > 0) payload[key] = obj[key];
+        if (obj[key] && Object.keys(obj[key]).length > 0)
+            payload[key] = obj[key];
     }
     return Object.keys(payload).length > 0 ? payload : null;
 }
 
 function extractPins(obj) {
-    if (!obj) return null;
+    if (!obj)
+        return null;
 
     var pins = null;
     for (var i = 0; i < PIN_KEYS.length; i++) {
         var value = obj[PIN_KEYS[i]];
-        if (!value || Object.keys(value).length === 0) continue;
-        if (!pins) pins = {};
+        if (!value || Object.keys(value).length === 0)
+            continue;
+        if (!pins)
+            pins = {};
         pins[PIN_KEYS[i]] = value;
     }
     return pins;
 }
 
 function parse(root, jsonObj) {
+    jsonObj = migrateToVersion(jsonObj || {}, root.settingsConfigVersion) || jsonObj || {};
+    jsonObj.dockConfigs = DockConfig.normalize(jsonObj.dockConfigs);
+    // the dock pages configure whichever dock is selected, so an empty list leaves them blank
+    if (!jsonObj.dockConfigs.length)
+        delete jsonObj.dockConfigs;
     var SPEC = SpecModule.SPEC;
 
-    if (!jsonObj) return;
+    if (!jsonObj)
+        return;
 
     for (var k in SPEC) {
-        if (k === "pluginSettings") continue;
+        if (k === "pluginSettings")
+            continue;
         // Runtime-only keys are never in the JSON; resetting them here
         // would wipe values set by detection processes on every reload.
-        if (SPEC[k].persist === false) continue;
+        if (SPEC[k].persist === false)
+            continue;
         if (!(k in jsonObj)) {
             root[k] = Util.cloneDef(SPEC[k].def);
         }
     }
 
     for (var k in jsonObj) {
-        if (!SPEC[k]) continue;
-        if (k === "pluginSettings") continue;
+        if (!SPEC[k])
+            continue;
+        if (k === "pluginSettings")
+            continue;
         var raw = jsonObj[k];
         var spec = SPEC[k];
         var coerce = spec.coerce;
@@ -165,12 +198,17 @@ function toJson(root) {
     var SPEC = SpecModule.SPEC;
     var out = {};
     for (var k in SPEC) {
-        if (SPEC[k].persist === false) continue;
-        if (k === "pluginSettings") continue;
+        if (SPEC[k].persist === false)
+            continue;
+        if (k === "pluginSettings")
+            continue;
         var value = root[k];
-        if (k === "desktopWidgetInstances") value = withoutInstancePositions(value);
-        if (k === "builtInPluginSettings") value = withoutSessionBackedPluginState(value);
-        if (Util.isDefault(value, SPEC[k].def)) continue;
+        if (k === "desktopWidgetInstances")
+            value = withoutInstancePositions(value);
+        if (k === "builtInPluginSettings")
+            value = withoutSessionBackedPluginState(value);
+        if (Util.isDefault(value, SPEC[k].def))
+            continue;
         out[k] = value;
     }
     out.configVersion = root.settingsConfigVersion;
@@ -178,7 +216,8 @@ function toJson(root) {
 }
 
 function migrateToVersion(obj, targetVersion) {
-    if (!obj) return null;
+    if (!obj)
+        return null;
 
     var settings = JSON.parse(JSON.stringify(obj));
     var currentVersion = settings.configVersion || 0;
@@ -187,7 +226,7 @@ function migrateToVersion(obj, targetVersion) {
         return null;
     }
 
-    if (currentVersion < 2) {
+    if (currentVersion < 2 && targetVersion >= 2) {
         console.info("Migrating settings from version", currentVersion, "to version 2");
 
         if (settings.barConfigs === undefined) {
@@ -234,17 +273,7 @@ function migrateToVersion(obj, targetVersion) {
 
             settings.barConfigs = [defaultConfig];
 
-            var legacyKeys = [
-                "dankBarLeftWidgets", "dankBarCenterWidgets", "dankBarRightWidgets",
-                "dankBarWidgetOrder", "dankBarAutoHide", "dankBarAutoHideDelay",
-                "dankBarOpenOnOverview", "dankBarVisible", "dankBarSpacing",
-                "dankBarBottomGap", "dankBarInnerPadding", "dankBarPosition",
-                "dankBarSquareCorners", "dankBarNoBackground", "dankBarGothCornersEnabled",
-                "dankBarGothCornerRadiusOverride", "dankBarGothCornerRadiusValue",
-                "dankBarBorderEnabled", "dankBarBorderColor", "dankBarBorderOpacity",
-                "dankBarBorderThickness", "popupGapsAuto", "popupGapsManual",
-                "dankBarAtBottom", "topBarAtBottom", "dankBarTransparency", "dankBarWidgetTransparency"
-            ];
+            var legacyKeys = ["dankBarLeftWidgets", "dankBarCenterWidgets", "dankBarRightWidgets", "dankBarWidgetOrder", "dankBarAutoHide", "dankBarAutoHideDelay", "dankBarOpenOnOverview", "dankBarVisible", "dankBarSpacing", "dankBarBottomGap", "dankBarInnerPadding", "dankBarPosition", "dankBarSquareCorners", "dankBarNoBackground", "dankBarGothCornersEnabled", "dankBarGothCornerRadiusOverride", "dankBarGothCornerRadiusValue", "dankBarBorderEnabled", "dankBarBorderColor", "dankBarBorderOpacity", "dankBarBorderThickness", "popupGapsAuto", "popupGapsManual", "dankBarAtBottom", "topBarAtBottom", "dankBarTransparency", "dankBarWidgetTransparency"];
 
             for (var i = 0; i < legacyKeys.length; i++) {
                 delete settings[legacyKeys[i]];
@@ -256,13 +285,13 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 2;
     }
 
-    if (currentVersion < 3) {
+    if (currentVersion < 3 && targetVersion >= 3) {
         console.info("Migrating settings from version", currentVersion, "to version 3");
         console.info("Per-widget controlCenterButton config now supported via widgetData properties");
         settings.configVersion = 3;
     }
 
-    if (currentVersion < 4) {
+    if (currentVersion < 4 && targetVersion >= 4) {
         console.info("Migrating settings from version", currentVersion, "to version 4");
         console.info("Migrating desktop widgets to unified desktopWidgetInstances");
 
@@ -357,7 +386,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 4;
     }
 
-    if (currentVersion < 5) {
+    if (currentVersion < 5 && targetVersion >= 5) {
         console.info("Migrating settings from version", currentVersion, "to version 5");
         console.info("Moving sensitive data (weather location, coordinates) to session.json");
 
@@ -367,7 +396,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 5;
     }
 
-    if (currentVersion < 6) {
+    if (currentVersion < 6 && targetVersion >= 6) {
         console.info("Migrating settings from version", currentVersion, "to version 6");
 
         if (settings.barElevationEnabled === undefined) {
@@ -386,11 +415,11 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 6;
     }
 
-    if (currentVersion < 11) {
+    if (currentVersion < 11 && targetVersion >= 11) {
         settings.configVersion = 11;
     }
 
-    if (currentVersion < 12) {
+    if (currentVersion < 12 && targetVersion >= 12) {
         console.info("Migrating settings from version", currentVersion, "to version 12");
         if (settings.batteryNotificationType !== undefined) {
             settings.batteryChargeLimitNotificationType = settings.batteryNotificationType;
@@ -401,7 +430,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 12;
     }
 
-    if (currentVersion < 13) {
+    if (currentVersion < 13 && targetVersion >= 13) {
         console.info("Migrating settings from version", currentVersion, "to version 13");
         console.info("Moving device and network pins to cache.json");
 
@@ -412,7 +441,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 13;
     }
 
-    if (currentVersion < 14) {
+    if (currentVersion < 14 && targetVersion >= 14) {
         console.info("Migrating settings from version", currentVersion, "to version 14");
         console.info("Dropping keys that match defaults; settings.json now stores only changed values");
 
@@ -420,7 +449,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 14;
     }
 
-    if (currentVersion < 15) {
+    if (currentVersion < 15 && targetVersion >= 15) {
         console.info("Migrating settings from version", currentVersion, "to version 15");
         console.info("Moving machine-specific state to session.json and usage histories to cache.json");
 
@@ -439,7 +468,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 15;
     }
 
-    if (currentVersion < 16) {
+    if (currentVersion < 16 && targetVersion >= 16) {
         console.info("Migrating settings from version", currentVersion, "to version 16");
         console.info("Moving Niri overview close behavior to the window focus setting");
 
@@ -451,7 +480,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 16;
     }
 
-    if (currentVersion < 17) {
+    if (currentVersion < 17 && targetVersion >= 17) {
         console.info("Migrating settings from version", currentVersion, "to version 17");
         console.info("Converting batteryPillStyle to batteryStyle");
 
@@ -470,7 +499,7 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 17;
     }
 
-    if (currentVersion < 18) {
+    if (currentVersion < 18 && targetVersion >= 18) {
         console.info("Migrating settings from version", currentVersion, "to version 18");
         console.info("Moving the shell-wide Dank Island onto its bar config as a per-instance mode");
 
@@ -493,5 +522,264 @@ function migrateToVersion(obj, targetVersion) {
         settings.configVersion = 18;
     }
 
+    if (currentVersion < 19 && targetVersion >= 19) {
+        console.info("Migrating settings from version", currentVersion, "to version 19");
+        console.info("Moving global bar widget options onto each widget instance");
+        migrateBarWidgetGlobals(settings);
+        settings.configVersion = 19;
+    }
+
+    if (currentVersion < 20 && targetVersion >= 20) {
+        console.info("Migrating settings from version", currentVersion, "to version 20");
+        console.info("Marking bars and dock that already match the surface opacity as following the interface style");
+        var surfaceOpacity = settings.popupTransparency ?? 1.0;
+        var bars19 = Array.isArray(settings.barConfigs) ? settings.barConfigs : [];
+        for (var i19 = 0; i19 < bars19.length; i19++) {
+            if (!bars19[i19] || bars19[i19].followInterfaceStyle !== undefined)
+                continue;
+            bars19[i19].followInterfaceStyle = (bars19[i19].transparency ?? 1.0) === surfaceOpacity;
+        }
+        if (settings.dockFollowInterfaceStyle === undefined)
+            settings.dockFollowInterfaceStyle = (settings.dockTransparency ?? 1.0) === surfaceOpacity;
+        settings.configVersion = 20;
+    }
+
+    if (currentVersion < 21 && targetVersion >= 21) {
+        console.info("Migrating settings from version", currentVersion, "to version 21");
+        console.info("Dropping settings keys that no longer have a consumer");
+        for (var i21 = 0; i21 < REMOVED_KEYS_V21.length; i21++)
+            delete settings[REMOVED_KEYS_V21[i21]];
+        settings.configVersion = 21;
+    }
+
+    if (currentVersion < 22 && targetVersion >= 22) {
+        const moves = [["waveProgressEnabled", "waveProgress", true], ["mediaWallpaperEnabled", "albumArtBackdrop", true], ["mediaUseAlbumArtAccent", "albumArtAccent", true], ["appleMusicAnimatedArtEnabled", "animatedArt", false]];
+        const options = Object.assign({}, settings.dashOptions ?? {});
+        const media = Object.assign({}, options.media ?? {});
+        for (const [oldKey, key, def] of moves) {
+            const value = settings[oldKey];
+            delete settings[oldKey];
+            if (media[key] !== undefined || typeof value !== "boolean" || value === def)
+                continue;
+            media[key] = value;
+        }
+        if (Object.keys(media).length > 0)
+            options.media = media;
+        if (Object.keys(options).length > 0)
+            settings.dashOptions = options;
+        settings.configVersion = 22;
+    }
+
+    if (currentVersion < 23 && targetVersion >= 23) {
+        if (settings.radiusStrength === undefined)
+            settings.radiusStrength = strengthFromWindowRadius(settings.cornerRadius);
+        delete settings.cornerRadius;
+        settings.configVersion = 23;
+    }
+
+    if (currentVersion < 24 && targetVersion >= 24) {
+        const removed = ["greeterFontFamily", "greeterLockDateFormat", "greeterWallpaperFillMode", "greeterWallpaperPath", "greeterShowWeather"];
+        for (const key of removed)
+            delete settings[key];
+        settings.dockConfigs = DockConfig.migrate(settings);
+        for (const key of Object.keys(settings)) {
+            if (key === "showDock" || (key !== "dockConfigs" && /^dock[A-Z]/.test(key)))
+                delete settings[key];
+        }
+        if (settings.screenPreferences)
+            delete settings.screenPreferences.dock;
+        if (settings.showOnLastDisplay)
+            delete settings.showOnLastDisplay.dock;
+        settings.configVersion = 24;
+    }
+
+    if (currentVersion < 25 && targetVersion >= 25) {
+        const bars = Array.isArray(settings.barConfigs) ? settings.barConfigs : [];
+        for (const bar of bars) {
+            if (!bar)
+                continue;
+            if (bar.removeWidgetPadding === true)
+                bar.widgetPadding = 0;
+            delete bar.removeWidgetPadding;
+        }
+        settings.configVersion = 25;
+    }
+
+    if (currentVersion < 26 && targetVersion >= 26) {
+        const customSpeed = 4;
+        const speedMoves = [["animationSpeed", "customAnimationDuration", "animationDuration", [0, 250, 500, 750], 500], ["popoutAnimationSpeed", "popoutCustomAnimationDuration", "popoutAnimationDuration", [0, 150, 300, 500], 150], ["modalAnimationSpeed", "modalCustomAnimationDuration", "modalAnimationDuration", [0, 150, 300, 500], 150], ["notificationAnimationSpeed", "notificationCustomAnimationDuration", "notificationAnimationDuration", [0, 200, 400, 600], 400]];
+        for (const [speedKey, customKey, durationKey, presets, customDefault] of speedMoves) {
+            const speed = settings[speedKey];
+            const custom = settings[customKey] ?? customDefault;
+            delete settings[speedKey];
+            delete settings[customKey];
+            if (speed === undefined || settings[durationKey] !== undefined)
+                continue;
+            settings[durationKey] = speed === customSpeed ? custom : (presets[speed] ?? presets[1]);
+        }
+        settings.configVersion = 26;
+    }
+
+    if (currentVersion < 27 && targetVersion >= 27) {
+        if (Array.isArray(settings.controlCenterWidgets)) {
+            settings.controlCenterWidgets = settings.controlCenterWidgets.map(widget => {
+                if (!widget || typeof widget !== "object")
+                    return widget;
+                const next = Object.assign({}, widget);
+                const width = Number(next.width);
+                delete next.width;
+                const cells = Number.isInteger(next.w) && next.w > 0 ? next.w : Number.isFinite(width) && width > 0 ? Math.max(1, Math.min(4, Math.round(width / 25))) : 2;
+                next.w = cells * 2;
+                if (next.h === undefined)
+                    next.h = 1;
+                return next;
+            });
+        }
+        const sheetWidth = Number(settings.controlCenterWidth);
+        delete settings.controlCenterWidth;
+        const columns = Number(settings.controlCenterColumns);
+        if (Number.isFinite(columns) && columns > 0)
+            settings.controlCenterColumns = Math.max(3, Math.round(columns)) * 2;
+        else if (Number.isFinite(sheetWidth) && sheetWidth > 0)
+            settings.controlCenterColumns = Math.max(3, Math.min(6, Math.round(sheetWidth / (550 / 4)))) * 2;
+        settings.configVersion = 27;
+    }
+
+    if (currentVersion < 28 && targetVersion >= 28) {
+        const surfaceOpacity = Number.isFinite(Number(settings.popupTransparency)) ? Number(settings.popupTransparency) : 1.0;
+        const bars = Array.isArray(settings.barConfigs) ? settings.barConfigs : [];
+        const frameOpacity = Number(settings.frameOpacity);
+        const frameBar = bars.find(bc => bc && bc.enabled !== false && bc.island !== true);
+        if (frameBar && Number.isFinite(frameOpacity) && frameOpacity !== surfaceOpacity && frameBar.followInterfaceStyle !== false) {
+            frameBar.followInterfaceStyle = false;
+            frameBar.transparency = frameOpacity;
+        }
+        for (const bc of bars) {
+            if (!bc || bc.island !== true)
+                continue;
+            const islandOpacity = Number(bc.islandTransparency);
+            if (Number.isFinite(islandOpacity)) {
+                bc.transparency = islandOpacity;
+                bc.followInterfaceStyle = islandOpacity === surfaceOpacity;
+            }
+            delete bc.islandTransparency;
+            delete bc.islandCornerRadius;
+        }
+        delete settings.frameColor;
+        delete settings.frameOpacity;
+        if (settings.blurBorderEnabled === undefined)
+            settings.blurBorderEnabled = settings.blurEnabled === true;
+        settings.blurBorderSeeded = settings.blurEnabled === true;
+        settings.configVersion = 28;
+    }
+
+    if (currentVersion < 29 && targetVersion >= 29) {
+        console.info("Migrating settings from version", currentVersion, "to version 29");
+        console.info("Moving launcher logo options onto each launcher button instance");
+        migrateBarWidgetGlobals(settings);
+        delete settings.launcherLogoColorInvertOnMode;
+        settings.configVersion = 29;
+    }
+
+    if (currentVersion < 30 && targetVersion >= 30) {
+        if (settings.dmsWindowsFloating === false)
+            settings.dmsWindowsFloatingSeeded = ["niri", "hyprland", "mango"];
+        delete settings.dmsWindowsFloating;
+        settings.configVersion = 30;
+    }
+
+    if (currentVersion < 31 && targetVersion >= 31) {
+        const glassLayers = settings.blurEnabled === true && settings.blurForegroundLayers === false;
+        const foregroundOpacity = Util.percentToUnit(settings.foregroundLayerTransparency) ?? 1.0;
+        const followedOpacity = glassLayers ? 0 : foregroundOpacity;
+        const bars = Array.isArray(settings.barConfigs) ? settings.barConfigs : [];
+        for (const bc of bars) {
+            if (!bc || bc.widgetFollowInterfaceStyle !== undefined)
+                continue;
+            bc.widgetFollowInterfaceStyle = (bc.widgetTransparency ?? 1.0) === followedOpacity;
+        }
+        settings.configVersion = 31;
+    }
+
+    if (currentVersion < 35 && targetVersion >= 35) {
+        if (Array.isArray(settings.controlCenterWidgets))
+            settings.controlCenterWidgets = migrateControlCenterHeader(settings.controlCenterWidgets, currentVersion < 33, settings.controlCenterColumns ?? 8);
+        settings.configVersion = 35;
+    }
+
     return settings;
+}
+
+function migrateControlCenterHeader(widgets, fixedHeader, columns) {
+    const header = widgets.filter(widget => CC_HEADER_IDS.includes(widget?.id));
+    if (!fixedHeader && header.length === 0)
+        return widgets;
+    const rest = widgets.filter(widget => !CC_HEADER_IDS.includes(widget?.id));
+    const actions = header.find(widget => Array.isArray(widget?.actions))?.actions ?? [];
+    const wanted = id => !rest.some(widget => widget?.id === id) && actions.find(action => action?.id === id)?.enabled !== false;
+    const tiles = CC_ACTION_TILE_IDS.filter(wanted).map(id => ({
+                id: id,
+                enabled: true,
+                w: 1,
+                h: 1,
+                small: true
+            }));
+    const footer = rest.some(widget => widget?.id === "runningApps") ? [] : [
+        {
+            id: "runningApps",
+            enabled: true,
+            w: 4,
+            h: 1,
+            footer: true
+        }
+    ];
+    const identity = header.length === 0 ? {} : header.find(widget => widget.id === "userCard" || (widget.id === "header" && widget.showUser !== false));
+    if (!identity || rest.some(widget => widget?.id === "user"))
+        return tiles.concat(rest, footer);
+    const user = {
+        id: "user",
+        enabled: true,
+        w: Math.max(1, columns - tiles.length),
+        h: 1
+    };
+    for (const key of CC_USER_KEYS) {
+        if (key in identity)
+            user[key] = identity[key];
+    }
+    return [user].concat(tiles, rest, footer);
+}
+
+function migrateBarWidgetGlobals(settings) {
+    var bars = Array.isArray(settings.barConfigs) ? settings.barConfigs : [];
+    for (var b = 0; b < bars.length; b++) {
+        for (var k = 0; k < BAR_WIDGET_LIST_KEYS.length; k++) {
+            var widgets = bars[b] && bars[b][BAR_WIDGET_LIST_KEYS[k]];
+            if (!Array.isArray(widgets))
+                continue;
+            for (var w = 0; w < widgets.length; w++) {
+                var raw = widgets[w];
+                var id = typeof raw === "string" ? raw : (raw && raw.id);
+                var map = WidgetDefaults.MIGRATED_GLOBALS[id];
+                if (!map)
+                    continue;
+                var entry = typeof raw === "string" ? {
+                    id: raw,
+                    enabled: true
+                } : raw;
+                var copied = false;
+                for (var entryKey in map) {
+                    var value = settings[map[entryKey]] ?? WidgetDefaults.LEGACY_GLOBAL_DEFAULTS[map[entryKey]];
+                    if (entry[entryKey] !== undefined || value === undefined)
+                        continue;
+                    entry[entryKey] = value;
+                    copied = true;
+                }
+                if (copied)
+                    widgets[w] = entry;
+            }
+        }
+    }
+    var removed = WidgetDefaults.removedGlobals();
+    for (var i = 0; i < removed.length; i++)
+        delete settings[removed[i]];
 }

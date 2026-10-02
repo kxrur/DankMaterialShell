@@ -67,7 +67,7 @@ Item {
         anchors.fill: parent
         visible: root.isVisible
         z: 50
-        color: Theme.withAlpha(Theme.surface, 0.85)
+        color: Theme.withAlpha(Theme.hostSurface, 0.85)
 
         WheelHandler {
             // Hold scroll so the editor beneath doesn't move while settings are open.
@@ -90,9 +90,9 @@ Item {
         width: Math.min(360, root.width - Theme.spacingL * 2)
         height: Math.min(settingsColumn.implicitHeight + Theme.spacingXL * 2, root.height - Theme.spacingL * 2)
         radius: Theme.cornerRadius
-        color: Theme.withAlpha(Theme.surfaceContainer, Theme.notepadTransparency)
+        color: Theme.withAlpha(Theme.cardSurface, Theme.notepadTransparency)
         border.color: Theme.outlineMedium
-        border.width: 1
+        border.width: Theme.layerOutlineWidth
         z: 100
 
         Rectangle {
@@ -131,7 +131,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         text: I18n.tr("Notepad Settings")
                         font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                     }
                 }
@@ -215,7 +215,7 @@ Item {
                             StyledText {
                                 text: I18n.tr("Find in Text")
                                 font.pixelSize: Theme.fontSizeMedium
-                                font.weight: Font.Medium
+                                font.weight: Theme.fontWeightMedium
                                 color: Theme.surfaceText
                             }
 
@@ -275,7 +275,7 @@ Item {
                             StyledText {
                                 text: I18n.tr("Font Size")
                                 font.pixelSize: Theme.fontSizeSmall
-                                font.weight: Font.Medium
+                                font.weight: Theme.fontWeightMedium
                                 color: Theme.surfaceText
                             }
 
@@ -295,9 +295,10 @@ Item {
                             DankActionButton {
                                 buttonSize: 32
                                 iconName: "remove"
+                                Accessible.name: I18n.tr("Decrease")
                                 iconSize: Theme.iconSizeSmall
                                 enabled: SettingsData.notepadFontSize > 8
-                                backgroundColor: Theme.withAlpha(Theme.surfaceVariant, 0.5)
+                                backgroundColor: Theme.chipSurface
                                 iconColor: Theme.surfaceText
                                 onClicked: {
                                     var newSize = Math.max(8, SettingsData.notepadFontSize - 1);
@@ -309,7 +310,7 @@ Item {
                                 width: 60
                                 height: 32
                                 radius: Theme.cornerRadius
-                                color: Theme.withAlpha(Theme.surfaceVariant, 0.3)
+                                color: Theme.chipSurface
                                 border.color: Theme.outlineHeavy
                                 border.width: 1
 
@@ -317,7 +318,7 @@ Item {
                                     anchors.centerIn: parent
                                     text: SettingsData.notepadFontSize + "px"
                                     font.pixelSize: Theme.fontSizeSmall
-                                    font.weight: Font.Medium
+                                    font.weight: Theme.fontWeightMedium
                                     color: Theme.surfaceText
                                 }
                             }
@@ -325,9 +326,10 @@ Item {
                             DankActionButton {
                                 buttonSize: 32
                                 iconName: "add"
+                                Accessible.name: I18n.tr("Increase")
                                 iconSize: Theme.iconSizeSmall
                                 enabled: SettingsData.notepadFontSize < 48
-                                backgroundColor: Theme.withAlpha(Theme.surfaceVariant, 0.5)
+                                backgroundColor: Theme.chipSurface
                                 iconColor: Theme.surfaceText
                                 onClicked: {
                                     var newSize = Math.min(48, SettingsData.notepadFontSize + 1);
@@ -352,7 +354,7 @@ Item {
                             anchors.left: parent.left
                             anchors.leftMargin: -Theme.spacingM
                             width: parent.width + Theme.spacingM
-                            text: I18n.tr("Surface Opacity")
+                            text: I18n.tr("Surface opacity")
                             description: I18n.tr("Override floating window transparency for Notepad")
                             checked: SettingsData.notepadTransparencyOverride >= 0
                             onToggled: checked => {
@@ -368,7 +370,6 @@ Item {
                             anchors.left: parent.left
                             anchors.leftMargin: -Theme.spacingM
                             width: parent.width + Theme.spacingM
-                            height: 24
                             visible: SettingsData.notepadTransparencyOverride >= 0
                             value: Math.round(Theme.notepadTransparency * 100)
                             minimum: 0
@@ -402,12 +403,12 @@ Item {
                             StyledText {
                                 text: I18n.tr("Default Mode")
                                 font.pixelSize: Theme.fontSizeSmall
-                                font.weight: Font.Medium
+                                font.weight: Theme.fontWeightMedium
                                 color: Theme.surfaceText
                             }
 
                             DankButtonGroup {
-                                model: [I18n.tr("Slideout"), I18n.tr("Popout")]
+                                model: [I18n.tr("Slideout", "noun, notepad default mode option, side panel"), I18n.tr("Popout", "noun, option to open in a popout window")]
                                 size: "small"
                                 currentIndex: SettingsData.notepadDefaultMode === "popout" ? 1 : 0
                                 onSelectionChanged: (index, selected) => {
@@ -426,7 +427,7 @@ Item {
                             StyledText {
                                 text: I18n.tr("Open From")
                                 font.pixelSize: Theme.fontSizeSmall
-                                font.weight: Font.Medium
+                                font.weight: Theme.fontWeightMedium
                                 color: Theme.surfaceText
                             }
 
@@ -458,7 +459,7 @@ Item {
                             visible: !SettingsData.notepadUseCompositorGap
                             text: I18n.tr("Manual Gaps")
                             font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Medium
+                            font.weight: Theme.fontWeightMedium
                             color: Theme.surfaceText
                         }
 
@@ -466,7 +467,6 @@ Item {
                             anchors.left: parent.left
                             anchors.leftMargin: Theme.spacingXS
                             width: parent.width - Theme.spacingXS * 2
-                            height: 24
                             visible: !SettingsData.notepadUseCompositorGap
                             value: SettingsData.notepadEdgeGap
                             minimum: 0
@@ -492,9 +492,9 @@ Item {
 
                 StyledRect {
                     width: parent.width
-                    implicitHeight: shortcutsHeader.height + (root.shortcutsExpanded ? shortcutsColumn.implicitHeight + Theme.spacingM : 0)
+                    implicitHeight: shortcutsHeader.height + (shortcutsLoader.item ? shortcutsLoader.height + Theme.spacingM : 0)
                     radius: Theme.cornerRadius
-                    color: root.shortcutsExpanded ? Theme.withAlpha(Theme.surfaceContainer, 0.95) : Theme.withAlpha(Theme.surfaceContainer, 0)
+                    color: root.shortcutsExpanded ? Theme.chipSurface : Theme.withAlpha(Theme.chipSurface, 0)
                     border.color: root.shortcutsExpanded ? Theme.primary : Theme.outlineMedium
                     border.width: root.shortcutsExpanded ? 2 : 1
 
@@ -523,38 +523,56 @@ Item {
                         }
 
                         StyledText {
-                            text: I18n.tr("Keyboard Shortcuts")
+                            text: I18n.tr("Keyboard shortcuts")
                             font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Medium
+                            font.weight: Theme.fontWeightMedium
                             color: Theme.surfaceText
                             anchors.verticalCenter: parent.verticalCenter
                         }
                     }
 
-                    Column {
-                        id: shortcutsColumn
-                        visible: root.shortcutsExpanded
+                    Loader {
+                        id: shortcutsLoader
+                        active: root.shortcutsExpanded
                         width: parent.width - Theme.spacingL * 2
                         anchors.top: shortcutsHeader.bottom
                         anchors.horizontalCenter: parent.horizontalCenter
-                        spacing: Theme.spacingXXS
 
-                        StyledText {
-                            width: parent.width
-                            text: I18n.tr("Ctrl+S: Save • Ctrl+O: Open • Ctrl+N: New • Ctrl+F: Find")
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            wrapMode: Text.WordWrap
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-
-                        StyledText {
-                            width: parent.width
-                            text: I18n.tr("Ctrl+A: Select All • Ctrl+P: Preview • Enter/Shift+Enter: Find Next/Previous • Esc: Close")
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            wrapMode: Text.WordWrap
-                            horizontalAlignment: Text.AlignHCenter
+                        sourceComponent: DankKeyHints {
+                            hints: [
+                                {
+                                    keys: ["Ctrl+S"],
+                                    label: I18n.tr("Save")
+                                },
+                                {
+                                    keys: ["Ctrl+O"],
+                                    label: I18n.tr("Open")
+                                },
+                                {
+                                    keys: ["Ctrl+N"],
+                                    label: I18n.tr("New", "adjective, shortcut or button that creates a new session or note")
+                                },
+                                {
+                                    keys: ["Ctrl+F"],
+                                    label: I18n.tr("Search", "search field placeholder")
+                                },
+                                {
+                                    keys: ["Return"],
+                                    label: I18n.tr("Next")
+                                },
+                                {
+                                    keys: ["Shift+Return"],
+                                    label: I18n.tr("Previous")
+                                },
+                                {
+                                    keys: ["Ctrl+P"],
+                                    label: I18n.tr("Preview", "verb, clipboard entry action button tooltip", true)
+                                },
+                                {
+                                    keys: ["Escape"],
+                                    label: I18n.tr("Close")
+                                }
+                            ]
                         }
                     }
                 }

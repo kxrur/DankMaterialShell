@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,7 @@ var (
 	matugenIsV4           bool
 	matugenIsV42          bool
 	matugenSupportsPrefer bool
+	matugenVersionStr     string
 )
 
 type Options struct {
@@ -110,6 +112,8 @@ type Options struct {
 	MatugenType         string
 	Contrast            float64
 	SourceMode          string
+	SeedColor           string
+	Spec                string
 	RunUserTemplates    bool
 	ColorsOnly          bool
 	StockColors         string
@@ -126,9 +130,31 @@ type ColorsOutput struct {
 	} `json:"colors"`
 }
 
+type SchemeColors struct {
+	Primary   string `json:"primary"`
+	Secondary string `json:"secondary"`
+	Tertiary  string `json:"tertiary"`
+}
+
 type SchemePreview struct {
-	Dark  string `json:"dark"`
-	Light string `json:"light"`
+	Dark  SchemeColors `json:"dark"`
+	Light SchemeColors `json:"light"`
+}
+
+func schemeColors(output, mode string) SchemeColors {
+	return SchemeColors{
+		Primary:   extractMatugenColor(output, "primary", mode),
+		Secondary: extractMatugenColor(output, "secondary", mode),
+		Tertiary:  extractMatugenColor(output, "tertiary", mode),
+	}
+}
+
+func nestedSchemeColors(colors, mode string) SchemeColors {
+	return SchemeColors{
+		Primary:   extractNestedColor(colors, "primary", mode),
+		Secondary: extractNestedColor(colors, "secondary", mode),
+		Tertiary:  extractNestedColor(colors, "tertiary", mode),
+	}
 }
 
 var previewSchemeTypes = []string{
@@ -143,13 +169,21 @@ var previewSchemeTypes = []string{
 	"scheme-rainbow",
 }
 
-func PreviewSchemes(sourceColor string, contrast float64, imagePath string) (map[string]SchemePreview, error) {
+func PreviewSchemes(sourceColor string, contrast float64, imagePath, spec string) (map[string]SchemePreview, error) {
 	if sourceColor == "" {
 		return nil, fmt.Errorf("source color is required")
 	}
 
 	previews := make(map[string]SchemePreview, len(previewSchemeTypes)+1)
 	for _, schemeType := range previewSchemeTypes {
+		if spec == Spec2025 && SpecSupportsScheme(schemeType) {
+			colors, err := GenerateSpecColors(sourceColor, schemeType, contrast, ColorModeDark, Spec2025)
+			if err != nil {
+				return nil, fmt.Errorf("preview %s: %w", schemeType, err)
+			}
+			previews[schemeType] = SchemePreview{Dark: nestedSchemeColors(colors, "dark"), Light: nestedSchemeColors(colors, "light")}
+			continue
+		}
 		output, err := runMatugenDryRun(&Options{
 			Kind:        "hex",
 			Value:       sourceColor,
@@ -161,40 +195,48 @@ func PreviewSchemes(sourceColor string, contrast float64, imagePath string) (map
 			return nil, fmt.Errorf("preview %s: %w", schemeType, err)
 		}
 
-		dark := extractMatugenColor(output, "primary", "dark")
-		light := extractMatugenColor(output, "primary", "light")
-		if dark == "" || light == "" {
+		dark := schemeColors(output, "dark")
+		light := schemeColors(output, "light")
+		if dark.Primary == "" || light.Primary == "" {
 			return nil, fmt.Errorf("preview %s: primary colors missing from matugen output", schemeType)
 		}
 		previews[schemeType] = SchemePreview{Dark: dark, Light: light}
 	}
 
-	previews["scheme-smart"] = smartSchemePreview(previews["scheme-tonal-spot"], contrast, imagePath)
+	previews["scheme-smart"] = smartSchemePreview(previews["scheme-tonal-spot"], sourceColor, contrast, imagePath)
 	return previews, nil
 }
 
-func smartSchemePreview(fallback SchemePreview, contrast float64, imagePath string) SchemePreview {
-	if imagePath == "" {
-		return fallback
-	}
+func smartSchemePreview(fallback SchemePreview, sourceColor string, contrast float64, imagePath string) SchemePreview {
 	flags, err := detectMatugenVersion()
 	if err != nil || !flags.isV42 {
 		return fallback
 	}
-	output, err := runMatugenDryRun(&Options{
-		Kind:        "image",
-		Value:       imagePath,
+	opts := &Options{
+		Kind:        "hex",
+		Value:       sourceColor,
 		Mode:        ColorModeDark,
 		MatugenType: "scheme-smart",
 		Contrast:    contrast,
-	})
+	}
+	if imagePath != "" {
+		opts.Kind = "image"
+		opts.Value = imagePath
+	}
+	_, cleanup, err := stageImageSource(opts)
 	if err != nil {
 		log.Warnf("Smart scheme preview failed falling back to tonal-spot: %v", err)
 		return fallback
 	}
-	dark := extractMatugenColor(output, "primary", "dark")
-	light := extractMatugenColor(output, "primary", "light")
-	if dark == "" || light == "" {
+	defer cleanup()
+	output, err := runMatugenDryRun(opts)
+	if err != nil {
+		log.Warnf("Smart scheme preview failed falling back to tonal-spot: %v", err)
+		return fallback
+	}
+	dark := schemeColors(output, "dark")
+	light := schemeColors(output, "light")
+	if dark.Primary == "" || light.Primary == "" {
 		log.Warn("Smart scheme preview failed falling back to tonal-spot: primary colors missing from matugen output")
 		return fallback
 	}
@@ -319,16 +361,16 @@ func buildOnce(opts *Options) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := resolveSmartMode(opts, flags); err != nil {
+	sourceImage, cleanup, err := stageImageSource(opts)
+	if err != nil {
 		return false, err
 	}
-
-	cfgFile, err := os.CreateTemp("", "matugen-config-*.toml")
+	defer cleanup()
+	smartJSON, err := resolveSmartMode(opts, flags)
 	if err != nil {
-		return false, fmt.Errorf("failed to create temp config: %w", err)
+		return false, err
 	}
-	defer os.Remove(cfgFile.Name())
-	defer cfgFile.Close()
+	seeds := loadSeedCache(opts.StateDir)
 
 	tmpDir, err := os.MkdirTemp("", "matugen-templates-*")
 	if err != nil {
@@ -336,34 +378,31 @@ func buildOnce(opts *Options) (bool, error) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := buildMergedConfig(opts, cfgFile, tmpDir); err != nil {
-		return false, fmt.Errorf("failed to build config: %w", err)
-	}
-	cfgFile.Close()
-
 	oldColors, _ := os.ReadFile(opts.ColorsOutput())
 
-	var primaryDark, primaryLight, surface string
+	var primaryDark, primaryLight, surfaceDark, surfaceLight, containerDark, containerLight string
 	var dank16JSON string
-	var importArgs []string
-	var sourceImage string
+	var importArgs, args []string
 
-	// Colorful mode resolves the seed here, before matugen is invoked at all,
-	// by rewriting the source to the extracted hex. Both the dry-run and the
-	// real run below read opts.Kind/opts.Value, so one rewrite covers both and
-	// they cannot disagree about the seed. Extraction failure (a format
-	// image.Decode cannot read, an unreadable file) falls through to matugen's
-	// own extraction: this must never fail a theme build.
+	if opts.StockColors == "" && opts.SeedColor != "" {
+		seed, err := NormalizeHexColor(opts.SeedColor)
+		if err != nil {
+			return false, err
+		}
+		log.Infof("Seed color override: %s -> %s", opts.Value, seed)
+		opts.Kind = "hex"
+		opts.Value = seed
+		opts.SourceMode = SourceModeDominant
+	}
+
 	if opts.StockColors == "" && opts.Kind == "image" && opts.SourceMode == SourceModeColorful {
-		if seed, err := ExtractSourceColor(opts.Value); err != nil {
+		seed, err := seeds.resolve(sourceImage, opts.SourceMode, flags.version, func() (string, error) {
+			return ExtractSourceColor(opts.Value)
+		})
+		if err != nil {
 			log.Warnf("Colorful source extraction failed for %s, using matugen's own: %v", opts.Value, err)
 		} else {
 			log.Infof("Colorful source color: %s -> %s", opts.Value, seed)
-			// matugen resolves {{image}} to an absolute path, so match it.
-			sourceImage = opts.Value
-			if abs, err := filepath.Abs(sourceImage); err == nil {
-				sourceImage = abs
-			}
 			opts.Kind = "hex"
 			opts.Value = seed
 		}
@@ -373,7 +412,10 @@ func buildOnce(opts *Options) (bool, error) {
 		log.Info("Using stock/custom theme colors with matugen base")
 		primaryDark = extractNestedColor(opts.StockColors, "primary", "dark")
 		primaryLight = extractNestedColor(opts.StockColors, "primary", "light")
-		surface = extractNestedColor(opts.StockColors, "surface", "dark")
+		surfaceDark = extractNestedColor(opts.StockColors, "surface", "dark")
+		surfaceLight = extractNestedColor(opts.StockColors, "surface", "light")
+		containerDark = extractNestedColor(opts.StockColors, "primary_container", "dark")
+		containerLight = extractNestedColor(opts.StockColors, "primary_container", "light")
 
 		if primaryDark == "" {
 			return false, fmt.Errorf("failed to extract primary dark from stock colors")
@@ -382,28 +424,67 @@ func buildOnce(opts *Options) (bool, error) {
 			primaryLight = primaryDark
 		}
 
-		dank16JSON = generateDank16Variants(primaryDark, primaryLight, surface, opts.Mode)
+		dank16JSON = generateDank16Variants(primaryDark, primaryLight, surfaceDark, surfaceLight, containerDark, containerLight, opts.Mode)
 		importData := fmt.Sprintf(`{"colors": %s, "dank16": %s}`, opts.StockColors, dank16JSON)
 		importArgs = []string{"--import-json-string", importData}
 
 		log.Info("Running matugen color hex with stock color overrides")
-		args := []string{"color", "hex", primaryDark, "-m", string(opts.Mode), "-t", opts.MatugenType, "-c", cfgFile.Name()}
-		args = appendContrastArg(args, opts.Contrast)
-		args = append(args, importArgs...)
-		if err := runMatugen(args, opts.SourceMode); err != nil {
-			return false, err
-		}
+		args = []string{"color", "hex", primaryDark, "-m", string(opts.Mode), "-t", opts.MatugenType}
 	} else {
 		log.Infof("Using dynamic theme from %s: %s", opts.Kind, opts.Value)
+
+		if opts.Kind == "image" {
+			seed, err := seeds.resolve(sourceImage, opts.SourceMode, flags.version, func() (string, error) {
+				if seed, err := matugenSeed(smartJSON); err == nil {
+					return seed, nil
+				}
+				output, err := runMatugenDryRun(opts)
+				if err != nil {
+					return "", err
+				}
+				return matugenSeed(output)
+			})
+			if err != nil {
+				log.Warnf("Seed resolution failed for %s, running matugen on the image: %v", sourceImage, err)
+			} else {
+				log.Infof("Seed color: %s -> %s", sourceImage, seed)
+				opts.Kind = "hex"
+				opts.Value = seed
+			}
+		}
 
 		matJSON, err := runMatugenDryRun(opts)
 		if err != nil {
 			return false, fmt.Errorf("matugen dry-run failed: %w", err)
 		}
 
-		primaryDark = extractMatugenColor(matJSON, "primary", "dark")
-		primaryLight = extractMatugenColor(matJSON, "primary", "light")
-		surface = extractMatugenColor(matJSON, "surface", "dark")
+		// The 2025 spec is generated here from the seed matugen settled on and
+		// overrides matugen's own roles through the import, so templates,
+		// {{image}} and the user's own config keep working unchanged.
+		var specColors string
+		if opts.Spec == Spec2025 && SpecSupportsScheme(opts.MatugenType) {
+			seed := opts.Value
+			if opts.Kind != "hex" {
+				seed = extractMatugenColor(matJSON, "source_color", "dark")
+			}
+			specColors, err = GenerateSpecColors(seed, opts.MatugenType, opts.Contrast, opts.Mode, Spec2025)
+			if err != nil {
+				return false, fmt.Errorf("spec 2025 palette failed: %w", err)
+			}
+		}
+
+		extract := func(role, mode string) string {
+			if specColors != "" {
+				return extractNestedColor(specColors, role, mode)
+			}
+			return extractMatugenColor(matJSON, role, mode)
+		}
+		primaryDark = extract("primary", "dark")
+		primaryLight = extract("primary", "light")
+		surfaceDark = extract("surface", "dark")
+		surfaceLight = extract("surface", "light")
+		containerDark = extract("primary_container", "dark")
+		containerLight = extract("primary_container", "light")
 
 		if primaryDark == "" {
 			return false, fmt.Errorf("failed to extract primary color")
@@ -412,38 +493,35 @@ func buildOnce(opts *Options) (bool, error) {
 			primaryLight = primaryDark
 		}
 
-		dank16JSON = generateDank16Variants(primaryDark, primaryLight, surface, opts.Mode)
-		importArgs = []string{"--import-json-string", buildImportData(dank16JSON, sourceImage)}
+		injections := InjectedPalettes(opts.ConfigDir, sourceImage, opts.Mode)
+
+		dank16JSON = generateDank16Variants(primaryDark, primaryLight, surfaceDark, surfaceLight, containerDark, containerLight, opts.Mode)
+		importArgs = []string{"--import-json-string", buildImportData(dank16JSON, sourceImage, specColors, injections)}
 
 		log.Infof("Running matugen %s with dank16 injection", opts.Kind)
-		var args []string
 		switch opts.Kind {
 		case "hex":
 			args = []string{"color", "hex", opts.Value}
 		default:
 			args = []string{opts.Kind, opts.Value}
 		}
-		args = append(args, "-m", string(opts.Mode), "-t", opts.MatugenType, "-c", cfgFile.Name())
-		args = appendContrastArg(args, opts.Contrast)
-		args = append(args, importArgs...)
-		if err := runMatugen(args, opts.SourceMode); err != nil {
-			return false, err
-		}
+		args = append(args, "-m", string(opts.Mode), "-t", opts.MatugenType)
 	}
+	args = appendContrastArg(args, opts.Contrast)
+	args = append(args, importArgs...)
 
-	newColors, err := os.ReadFile(opts.colorsStaging())
+	changed, err := renderColors(opts, args, tmpDir, oldColors)
 	if err != nil {
-		return false, fmt.Errorf("matugen did not produce colors output: %w", err)
+		return false, err
 	}
-	if bytes.Equal(oldColors, newColors) && len(oldColors) > 0 {
-		return false, nil
-	}
-	if err := os.Rename(opts.colorsStaging(), opts.ColorsOutput()); err != nil {
-		return false, fmt.Errorf("failed to commit colors output: %w", err)
-	}
-
 	if opts.ColorsOnly {
-		return true, nil
+		return changed, nil
+	}
+	if err := renderTemplates(opts, args, tmpDir); err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
 	}
 
 	if isDMSGTKActive(opts.ConfigDir) {
@@ -482,6 +560,50 @@ func buildOnce(opts *Options) (bool, error) {
 	return true, nil
 }
 
+// The shell only needs dms-colors.json, so it is rendered and committed on its own before the template pass.
+func renderColors(opts *Options, args []string, tmpDir string, oldColors []byte) (bool, error) {
+	colorsOpts := *opts
+	colorsOpts.ColorsOnly = true
+	cfgPath, err := writeMergedConfig(&colorsOpts, tmpDir, "colors.toml")
+	if err != nil {
+		return false, err
+	}
+	if err := runMatugen(append(slices.Clone(args), "-c", cfgPath), opts.SourceMode); err != nil {
+		return false, err
+	}
+	newColors, err := os.ReadFile(opts.colorsStaging())
+	if err != nil {
+		return false, fmt.Errorf("matugen did not produce colors output: %w", err)
+	}
+	if bytes.Equal(oldColors, newColors) && len(oldColors) > 0 {
+		return false, nil
+	}
+	if err := os.Rename(opts.colorsStaging(), opts.ColorsOutput()); err != nil {
+		return false, fmt.Errorf("failed to commit colors output: %w", err)
+	}
+	return true, nil
+}
+
+func renderTemplates(opts *Options, args []string, tmpDir string) error {
+	cfgPath, err := writeMergedConfig(opts, tmpDir, "templates.toml")
+	if err != nil {
+		return err
+	}
+	return runMatugen(append(slices.Clone(args), "-c", cfgPath), opts.SourceMode)
+}
+
+func writeMergedConfig(opts *Options, tmpDir, name string) (string, error) {
+	cfgFile, err := os.Create(filepath.Join(tmpDir, name))
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp config: %w", err)
+	}
+	defer cfgFile.Close()
+	if err := buildMergedConfig(opts, cfgFile, tmpDir); err != nil {
+		return "", fmt.Errorf("failed to build config: %w", err)
+	}
+	return cfgFile.Name(), nil
+}
+
 func appendContrastArg(args []string, contrast float64) []string {
 	if contrast == 0 {
 		return args
@@ -492,12 +614,28 @@ func appendContrastArg(args []string, contrast float64) []string {
 // buildImportData is the JSON passed to matugen's --import-json-string. image is
 // set only when the source was rewritten from a wallpaper to a hex color, where
 // matugen leaves {{image}} unset and templates using it would render "Null".
-func buildImportData(dank16JSON, image string) string {
-	if image == "" {
-		return fmt.Sprintf(`{"dank16": %s}`, dank16JSON)
+// colors, when set, is a full role map that replaces matugen's own palette.
+// Each injection is exposed under its own namespace (e.g. {{mypalette.color0}}),
+// skipping any name already emitted so the object stays valid.
+func buildImportData(dank16JSON, image, colors string, injections []paletteInjection) string {
+	fields := []string{fmt.Sprintf(`"dank16": %s`, dank16JSON)}
+	if image != "" {
+		path, _ := json.Marshal(image)
+		fields = append(fields, fmt.Sprintf(`"image": %s`, path))
 	}
-	path, _ := json.Marshal(image)
-	return fmt.Sprintf(`{"dank16": %s, "image": %s}`, dank16JSON, path)
+	if colors != "" {
+		fields = append(fields, fmt.Sprintf(`"colors": %s`, colors))
+	}
+	seen := map[string]bool{"dank16": true, "image": true, "colors": true}
+	for _, inj := range injections {
+		if inj.Namespace == "" || inj.JSON == "" || seen[inj.Namespace] {
+			continue
+		}
+		seen[inj.Namespace] = true
+		nsKey, _ := json.Marshal(inj.Namespace)
+		fields = append(fields, fmt.Sprintf(`%s: %s`, nsKey, inj.JSON))
+	}
+	return "{" + strings.Join(fields, ", ") + "}"
 }
 
 func userConfigSection(opts *Options) string {
@@ -768,6 +906,7 @@ var vscodeEditors = []vscodeEditor{
 	{"codium", ".vscode-oss"},
 	{"cursor", ".cursor"},
 	{"windsurf", ".windsurf"},
+	{"positron", ".positron"},
 	{"vscode-insiders", ".vscode-insiders"},
 }
 
@@ -838,6 +977,7 @@ type matugenFlags struct {
 	isV4           bool
 	isV42          bool
 	supportsPrefer bool
+	version        string
 }
 
 func detectMatugenVersion() (matugenFlags, error) {
@@ -845,7 +985,7 @@ func detectMatugenVersion() (matugenFlags, error) {
 	defer matugenVersionMu.Unlock()
 
 	if matugenVersionOK {
-		return matugenFlags{matugenSupportsCOE, matugenIsV4, matugenIsV42, matugenSupportsPrefer}, nil
+		return matugenFlags{matugenSupportsCOE, matugenIsV4, matugenIsV42, matugenSupportsPrefer, matugenVersionStr}, nil
 	}
 
 	return detectMatugenVersionLocked()
@@ -902,6 +1042,7 @@ func detectMatugenVersionLocked() (matugenFlags, error) {
 	// --prefer landed in 4.1; 4.0.x has --source-color-index but not --prefer,
 	// and clap aborts on an unknown argument rather than ignoring it.
 	matugenSupportsPrefer = major > 4 || (major == 4 && minor >= 1)
+	matugenVersionStr = versionStr
 	matugenVersionOK = true
 
 	if matugenSupportsCOE {
@@ -913,7 +1054,7 @@ func detectMatugenVersionLocked() (matugenFlags, error) {
 	if matugenIsV4 && !matugenSupportsPrefer {
 		log.Debugf("Matugen %s detected: --prefer unavailable, source modes fall back to the dominant color", versionStr)
 	}
-	return matugenFlags{matugenSupportsCOE, matugenIsV4, matugenIsV42, matugenSupportsPrefer}, nil
+	return matugenFlags{matugenSupportsCOE, matugenIsV4, matugenIsV42, matugenSupportsPrefer, matugenVersionStr}, nil
 }
 
 func buildMatugenArgs(baseArgs []string, flags matugenFlags, sourceMode string) []string {
@@ -1074,31 +1215,39 @@ func extractTopLevelString(jsonStr, key string) string {
 	return ""
 }
 
-func resolveSmartMode(opts *Options, flags matugenFlags) error {
+func resolveSmartMode(opts *Options, flags matugenFlags) (string, error) {
 	if opts.MatugenType == "scheme-smart" && !flags.isV42 {
-		return fmt.Errorf("scheme-smart requires matugen 4.2+")
+		return "", fmt.Errorf("scheme-smart requires matugen 4.2+")
 	}
 	if opts.Mode != ColorModeSmart {
-		return nil
+		return "", nil
 	}
 	if !flags.isV42 {
-		return fmt.Errorf("smart mode requires matugen 4.2+")
+		return "", fmt.Errorf("smart mode requires matugen 4.2+")
 	}
 	if opts.Kind != "image" || opts.StockColors != "" {
 		opts.Mode = ColorModeDark
-		return nil
+		return "", nil
 	}
 	output, err := runMatugenDryRun(opts)
 	if err != nil {
-		return fmt.Errorf("smart mode resolution failed: %w", err)
+		return "", fmt.Errorf("smart mode resolution failed: %w", err)
 	}
 	resolved := extractTopLevelString(output, "mode")
 	if resolved != string(ColorModeLight) && resolved != string(ColorModeDark) {
-		return fmt.Errorf("smart mode resolution returned unexpected mode %q", resolved)
+		return "", fmt.Errorf("smart mode resolution returned unexpected mode %q", resolved)
 	}
 	log.Infof("Smart mode resolved to %s", resolved)
 	opts.Mode = ColorMode(resolved)
-	return nil
+	return output, nil
+}
+
+func matugenSeed(dryRunJSON string) (string, error) {
+	seed := extractMatugenColor(dryRunJSON, "source_color", "dark")
+	if seed == "" {
+		return "", fmt.Errorf("matugen output has no source_color")
+	}
+	return seed, nil
 }
 
 func extractNestedColor(jsonStr, colorName, variant string) string {
@@ -1125,13 +1274,16 @@ func extractNestedColor(jsonStr, colorName, variant string) string {
 	return color
 }
 
-func generateDank16Variants(primaryDark, primaryLight, surface string, mode ColorMode) string {
+func generateDank16Variants(primaryDark, primaryLight, surfaceDark, surfaceLight, containerDark, containerLight string, mode ColorMode) string {
 	variantOpts := dank16.VariantOptions{
-		PrimaryDark:  primaryDark,
-		PrimaryLight: primaryLight,
-		Background:   surface,
-		UseDPS:       true,
-		IsLightMode:  mode == ColorModeLight,
+		PrimaryDark:     primaryDark,
+		PrimaryLight:    primaryLight,
+		BackgroundDark:  surfaceDark,
+		BackgroundLight: surfaceLight,
+		ContainerDark:   containerDark,
+		ContainerLight:  containerLight,
+		UseDPS:          true,
+		IsLightMode:     mode == ColorModeLight,
 	}
 	variantColors := dank16.GenerateVariantPalette(variantOpts)
 	return dank16.GenerateVariantJSON(variantColors)

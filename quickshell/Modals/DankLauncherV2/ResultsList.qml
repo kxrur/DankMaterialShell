@@ -5,42 +5,70 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modals.DankLauncherV2.Components
 
 Item {
     id: root
 
     property var controller: null
+    property var keyForwardTargets: []
+    property Item focusReturnTarget: null
     property int gridColumns: controller?.gridColumns ?? 4
     property bool leadingSectionHeaderAtBottom: false
-    property var _visualRows: []
-    property var _flatIndexToRowMap: ({})
-    property var _cumulativeHeights: []
+    property bool showEmptyState: true
+    property var _visualModel: ({
+            rows: [],
+            indexMap: {},
+            heights: [],
+            height: 0
+        })
+    readonly property var _visualRows: _visualModel.rows
+    readonly property var _flatIndexToRowMap: _visualModel.indexMap
+    readonly property var _cumulativeHeights: _visualModel.heights
+    property int _lastSelectedFlatIndex: -1
+    property bool _selectionMotionReady: false
     property var transientSurfaceTracker: null
     readonly property bool _bottomSectionHeaderActive: leadingSectionHeaderAtBottom && (controller?.sections?.length ?? 0) > 0
+
+    readonly property real contentHeight: _visualModel.height
+    readonly property int pageRows: Math.max(1, Math.floor(height / (LauncherMetrics.rowHeight + LauncherMetrics.rowGap)))
 
     signal itemRightClicked(int index, var item, real mouseX, real mouseY)
 
     function _rebuildVisualModel() {
+        root._selectionMotionReady = false;
         var sections = root.controller?.sections ?? [];
         var rows = [];
         var indexMap = {};
         var cumHeights = [];
         var cumY = 0;
+        const rowHeight = LauncherMetrics.rowHeight + LauncherMetrics.rowGap;
+        const sectionBand = LauncherMetrics.sectionBand;
+        const sectionGap = LauncherMetrics.resultsGap;
 
         for (var s = 0; s < sections.length; s++) {
             var section = sections[s];
             var sectionId = section.id;
 
             if (!root._bottomSectionHeaderActive || s > 0) {
+                if (rows.length > 0) {
+                    cumHeights.push(cumY);
+                    rows.push({
+                        _rowId: "sp_" + sectionId,
+                        type: "spacer",
+                        height: sectionGap
+                    });
+                    cumY += sectionGap;
+                }
                 cumHeights.push(cumY);
                 rows.push({
                     _rowId: "h_" + sectionId,
                     type: "header",
                     section: section,
                     sectionId: sectionId,
-                    height: 32
+                    height: sectionBand
                 });
-                cumY += 32;
+                cumY += sectionBand;
             }
 
             if (section.collapsed)
@@ -63,14 +91,16 @@ Item {
                         item: items[i],
                         flatIndex: flatIdx,
                         sectionId: sectionId,
-                        height: 56
+                        firstInGroup: i === 0,
+                        lastInGroup: i === items.length - 1,
+                        height: rowHeight
                     });
-                    cumY += 56;
+                    cumY += rowHeight;
                 }
             } else {
                 var cols = root.controller?.getGridColumns(sectionId) ?? root.gridColumns;
-                var cellWidth = mode === "tile" ? Math.floor(root.width / 3) : Math.floor(root.width / root.gridColumns);
-                var cellHeight = mode === "tile" ? cellWidth * 0.75 : cellWidth + 24;
+                var cellWidth = Math.floor(root.width / cols);
+                var cellHeight = mode === "tile" ? cellWidth * LauncherMetrics.tileImageRatio : cellWidth + LauncherMetrics.tileLabelHeight;
                 var numRows = Math.ceil(items.length / cols);
 
                 for (var r = 0; r < numRows; r++) {
@@ -101,37 +131,68 @@ Item {
             }
         }
 
-        root._flatIndexToRowMap = indexMap;
-        root._cumulativeHeights = cumHeights;
-        root._visualRows = rows;
+        root._visualModel = {
+            rows: rows,
+            indexMap: indexMap,
+            heights: cumHeights,
+            height: cumY
+        };
     }
 
-    onGridColumnsChanged: Qt.callLater(_rebuildVisualModel)
-    onWidthChanged: Qt.callLater(_rebuildVisualModel)
-    onLeadingSectionHeaderAtBottomChanged: Qt.callLater(_rebuildVisualModel)
+    property string _pendingSectionId: ""
+
+    Timer {
+        id: rebuildTimer
+        interval: 0
+        onTriggered: {
+            root._rebuildVisualModel();
+            selectionTimer.restart();
+        }
+    }
+
+    Timer {
+        id: selectionTimer
+        interval: 0
+        onTriggered: {
+            if (root._pendingSectionId) {
+                root.revealExpandedSection(root._pendingSectionId);
+                root._pendingSectionId = "";
+                return;
+            }
+            if (root.controller?.keyboardNavigationActive)
+                root.ensureVisible(root.controller.selectedFlatIndex);
+        }
+    }
+
+    onGridColumnsChanged: rebuildTimer.restart()
+    onWidthChanged: rebuildTimer.restart()
+    onLeadingSectionHeaderAtBottomChanged: rebuildTimer.restart()
 
     Connections {
         target: root.controller
         function onSectionsChanged() {
-            Qt.callLater(root._rebuildVisualModel);
+            rebuildTimer.restart();
         }
         function onViewModeVersionChanged() {
-            Qt.callLater(root._rebuildVisualModel);
+            rebuildTimer.restart();
         }
         function onSearchModeChanged() {
-            root._visualRows = [];
-            root._cumulativeHeights = [];
-            root._flatIndexToRowMap = {};
+            root._visualModel = {
+                rows: [],
+                indexMap: {},
+                heights: [],
+                height: 0
+            };
         }
         function onSectionExpanded(sectionId) {
-            Qt.callLater(() => {
-                root._rebuildVisualModel();
-                Qt.callLater(() => root.revealExpandedSection(sectionId));
-            });
+            root._pendingSectionId = sectionId;
+            rebuildTimer.restart();
         }
     }
 
     function resetScroll() {
+        root._selectionMotionReady = false;
+        root._lastSelectedFlatIndex = root.controller?.selectedFlatIndex ?? -1;
         mainListView.contentY = mainListView.originY;
     }
 
@@ -190,32 +251,36 @@ Item {
             var rowItems = row.items;
             for (var i = 0; i < rowItems.length; i++) {
                 if (rowItems[i].flatIndex === controller.selectedFlatIndex) {
-                    var cellWidth = row.viewMode === "tile" ? Math.floor(width / 3) : Math.floor(width / row.cols);
-                    itemX = i * cellWidth + cellWidth / 2;
+                    var cellWidth = Math.floor(width / row.cols);
+                    itemX = (I18n.isRtl ? width - (i + 1) * cellWidth : i * cellWidth) + cellWidth / 2;
                     break;
                 }
             }
         }
 
         var visualY = rowY - mainListView.contentY + mainListView.originY + itemH / 2;
-        var clampedY = Math.max(40, Math.min(height - 40, visualY));
+        var clampedY = Math.max(LauncherMetrics.sectionBand, Math.min(height - LauncherMetrics.sectionBand, visualY));
         return mapToItem(null, itemX, clampedY);
     }
 
-    Connections {
-        target: root.controller
-        function onSelectedFlatIndexChanged() {
-            if (root.controller?.keyboardNavigationActive) {
-                Qt.callLater(() => root.ensureVisible(root.controller.selectedFlatIndex));
-            }
+    readonly property int controllerSelectedFlatIndex: root.controller?.selectedFlatIndex ?? -1
+
+    onControllerSelectedFlatIndexChanged: {
+        const previousRow = _visualModel.rows[_visualModel.indexMap[_lastSelectedFlatIndex]];
+        const nextIndex = controllerSelectedFlatIndex;
+        const nextRow = _visualModel.rows[_visualModel.indexMap[nextIndex]];
+        _selectionMotionReady = previousRow !== undefined && nextRow !== undefined;
+        _lastSelectedFlatIndex = nextIndex;
+        if (controller?.keyboardNavigationActive) {
+            selectionTimer.restart();
         }
     }
 
     Item {
         id: listClip
         anchors.fill: parent
-        anchors.topMargin: stickyHeader.visible ? 32 : 0
-        anchors.bottomMargin: bottomSectionHeader.visible ? bottomSectionHeader.height : 0
+        anchors.topMargin: stickyHeader.visible ? LauncherMetrics.sectionBand : 0
+        anchors.bottomMargin: bottomSectionHeader.visible ? bottomSectionHeader.height + LauncherMetrics.resultsGap : 0
         clip: true
 
         DankListView {
@@ -224,17 +289,34 @@ Item {
             width: parent.width
             height: parent.height + listClip.anchors.topMargin
             clip: true
-            scrollBarTopMargin: (root.controller?.sections?.length > 0) ? 32 : 0
+            scrollBarTopMargin: (root.controller?.sections?.length > 0) ? LauncherMetrics.sectionBand : 0
 
             model: ScriptModel {
                 values: root._visualRows
                 objectProp: "_rowId"
             }
 
-            add: null
-            remove: null
+            add: ListViewTransitions.add
+            remove: ListViewTransitions.remove
             displaced: null
             move: null
+
+            currentIndex: root._flatIndexToRowMap[root.controller?.selectedFlatIndex] ?? -1
+            highlightFollowsCurrentItem: false
+            highlight: LauncherHighlight {
+                animate: root._selectionMotionReady
+                readonly property var row: root._visualRows[mainListView.currentIndex]
+                readonly property bool gridRow: row?.type === "grid_row"
+                firstInGroup: gridRow || (row?.firstInGroup ?? true)
+                lastInGroup: gridRow || (row?.lastInGroup ?? true)
+                readonly property real cellWidth: gridRow ? Math.floor(mainListView.width / row.cols) : mainListView.width
+                readonly property int column: gridRow ? row.items.findIndex(entry => entry.flatIndex === root.controller?.selectedFlatIndex) : 0
+                x: gridRow ? (I18n.isRtl ? mainListView.width - (column + 1) * cellWidth : column * cellWidth) + LauncherMetrics.tileGap / 2 : 0
+                y: (mainListView.currentItem?.y ?? 0) + (gridRow ? LauncherMetrics.tileGap / 2 : 0)
+                width: cellWidth - (gridRow ? LauncherMetrics.tileGap : 0)
+                height: Math.max(0, (row?.height ?? 0) - (gridRow ? LauncherMetrics.tileGap : LauncherMetrics.rowGap))
+                visible: row?.type === "list_item" || gridRow && column >= 0
+            }
 
             delegate: Item {
                 id: delegateRoot
@@ -243,14 +325,39 @@ Item {
 
                 readonly property string rowType: modelData?.type ?? ""
 
+                z: 1
                 width: mainListView.width
-                height: modelData?.height ?? 52
+                height: modelData?.height ?? LauncherMetrics.rowHeight
+
+                Loader {
+                    active: delegateRoot.rowType === "list_item"
+                    sourceComponent: Rectangle {
+                        parent: mainListView.contentItem
+                        x: delegateRoot.x
+                        y: delegateRoot.y
+                        width: delegateRoot.width
+                        height: delegateRoot.height - LauncherMetrics.rowGap
+                        z: -1
+                        visible: delegateRoot.visible
+                        opacity: delegateRoot.opacity
+                        color: Theme.foregroundColor(Theme.cardSurface, Theme.isFloatingWindow(root))
+                        border.width: Theme.layerOutlineWidth
+                        border.color: Theme.outlineMedium
+                        radius: Theme.groupedListInnerRadius
+                        topLeftRadius: delegateRoot.modelData?.firstInGroup ? Theme.groupedListOuterRadius : radius
+                        topRightRadius: topLeftRadius
+                        bottomLeftRadius: delegateRoot.modelData?.lastInGroup ? Theme.groupedListOuterRadius : radius
+                        bottomRightRadius: bottomLeftRadius
+                    }
+                }
 
                 Loader {
                     anchors.fill: parent
+                    anchors.bottomMargin: LauncherMetrics.resultsGap
                     active: delegateRoot.rowType === "header"
                     visible: active
                     sourceComponent: SectionHeader {
+                        focusReturnTarget: root.focusReturnTarget
                         section: delegateRoot.modelData?.section ?? null
                         controller: root.controller
                         viewMode: {
@@ -270,11 +377,15 @@ Item {
 
                 Loader {
                     anchors.fill: parent
-                    anchors.topMargin: 2
-                    anchors.bottomMargin: 2
+                    anchors.topMargin: 0
+                    anchors.bottomMargin: LauncherMetrics.rowGap
                     active: delegateRoot.rowType === "list_item"
                     visible: active
-                    sourceComponent: ResultItem {
+                    sourceComponent: LauncherRow {
+                        keyForwardTargets: root.keyForwardTargets
+                        firstInGroup: delegateRoot.modelData?.firstInGroup ?? true
+                        lastInGroup: delegateRoot.modelData?.lastInGroup ?? true
+                        externalHighlight: true
                         item: delegateRoot.modelData?.item ?? null
                         isSelected: (delegateRoot.modelData?.flatIndex ?? -1) === root.controller?.selectedFlatIndex
                         controller: root.controller
@@ -306,21 +417,37 @@ Item {
                                 required property int index
 
                                 readonly property bool isTile: delegateRoot.modelData?.viewMode === "tile"
-                                readonly property real cellWidth: isTile ? Math.floor(delegateRoot.width / 3) : Math.floor(delegateRoot.width / (delegateRoot.modelData?.cols ?? root.gridColumns))
+                                readonly property real cellWidth: Math.floor(delegateRoot.width / (delegateRoot.modelData?.cols ?? root.gridColumns))
 
                                 width: cellWidth
                                 height: delegateRoot.height
 
+                                Rectangle {
+                                    parent: mainListView.contentItem
+                                    x: gridCellDelegate.x + LauncherMetrics.tileGap / 2
+                                    y: delegateRoot.y + LauncherMetrics.tileGap / 2
+                                    width: gridCellDelegate.width - LauncherMetrics.tileGap
+                                    height: delegateRoot.height - LauncherMetrics.tileGap
+                                    z: -1
+                                    visible: delegateRoot.visible
+                                    opacity: delegateRoot.opacity
+                                    color: Theme.foregroundColor(Theme.cardSurface, Theme.isFloatingWindow(root))
+                                    border.width: Theme.layerOutlineWidth
+                                    border.color: Theme.outlineMedium
+                                    radius: Theme.cornerRadiusL
+                                }
+
                                 Loader {
-                                    width: parent.width - 4
-                                    height: parent.height - 4
+                                    width: parent.width - LauncherMetrics.tileGap
+                                    height: parent.height - LauncherMetrics.tileGap
                                     anchors.centerIn: parent
                                     sourceComponent: gridCellDelegate.isTile ? tileCellComponent : gridCellComponent
 
                                     Component {
                                         id: gridCellComponent
 
-                                        GridItem {
+                                        LauncherTile {
+                                            externalHighlight: true
                                             item: gridCellDelegate.modelData?.item ?? null
                                             isSelected: (gridCellDelegate.modelData?.flatIndex ?? -1) === root.controller?.selectedFlatIndex
                                             controller: root.controller
@@ -342,6 +469,7 @@ Item {
                                         id: tileCellComponent
 
                                         TileItem {
+                                            externalHighlight: true
                                             item: gridCellDelegate.modelData?.item ?? null
                                             isSelected: (gridCellDelegate.modelData?.flatIndex ?? -1) === root.controller?.selectedFlatIndex
                                             controller: root.controller
@@ -373,14 +501,14 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.bottomMargin: bottomSectionHeader.visible ? bottomSectionHeader.height : 0
-        height: 24
+        height: Theme.spacingXL
         z: 100
         visible: {
             if (BlurService.enabled)
                 return false;
             if (mainListView.contentHeight <= mainListView.height)
                 return false;
-            var atBottom = mainListView.contentY >= mainListView.contentHeight - mainListView.height + mainListView.originY - 5;
+            var atBottom = mainListView.contentY >= mainListView.contentHeight - mainListView.height + mainListView.originY - Theme.spacingXS;
             if (atBottom)
                 return false;
 
@@ -405,7 +533,7 @@ Item {
             }
             GradientStop {
                 position: 1.0
-                color: Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency)
+                color: Theme.readableSurface
             }
         }
     }
@@ -415,7 +543,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: 32
+        height: LauncherMetrics.sectionBand
         z: 101
         color: "transparent"
         visible: !root._bottomSectionHeaderActive && stickyHeaderSection !== null
@@ -427,8 +555,8 @@ Item {
             if (scrollY <= 0)
                 return null;
 
-            var rows = root._visualRows;
-            var heights = root._cumulativeHeights;
+            var rows = root._visualModel.rows;
+            var heights = root._visualModel.heights;
             if (rows.length === 0 || heights.length === 0)
                 return null;
 
@@ -450,6 +578,7 @@ Item {
         }
 
         SectionHeader {
+            focusReturnTarget: root.focusReturnTarget
             width: parent.width
             section: stickyHeader.stickyHeaderSection
             controller: root.controller
@@ -465,13 +594,13 @@ Item {
                 void (stickyHeader.versionTrigger);
                 return root.controller?.canCollapseSection(stickyHeader.stickyHeaderSection?.id) ?? false;
             }
-            isSticky: true
             transientSurfaceTracker: root.transientSurfaceTracker
         }
     }
 
     SectionHeader {
         id: bottomSectionHeader
+        focusReturnTarget: root.focusReturnTarget
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -490,14 +619,13 @@ Item {
             return root.controller?.canChangeSectionViewMode(section?.id ?? "") ?? false;
         }
         canCollapse: root.controller?.canCollapseSection(section?.id ?? "") ?? false
-        isSticky: true
         popupAbove: true
         transientSurfaceTracker: root.transientSurfaceTracker
     }
 
     Item {
         anchors.centerIn: parent
-        visible: (!root.controller?.sections || root.controller.sections.length === 0) && !root.controller?.isFileSearching
+        visible: root.showEmptyState && (!root.controller?.sections || root.controller.sections.length === 0) && !root.controller?.isFileSearching
         width: emptyColumn.implicitWidth
         height: emptyColumn.implicitHeight
 
@@ -508,10 +636,12 @@ Item {
             DankIcon {
                 anchors.horizontalCenter: parent.horizontalCenter
                 name: getEmptyIcon()
-                size: 48
+                size: LauncherMetrics.gridIconSize
                 color: Theme.outlineButton
 
                 function getEmptyIcon() {
+                    if (root.controller?.activePluginId)
+                        return root.controller.getPluginMetadata(root.controller.activePluginId).icon;
                     var mode = root.controller?.searchMode ?? "all";
                     switch (mode) {
                     case "files":
@@ -538,10 +668,12 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: getEmptyText()
                 font.pixelSize: Theme.fontSizeMedium
-                color: Theme.surfaceVariantText
+                color: Theme.onSurfaceVariant
                 horizontalAlignment: Text.AlignHCenter
 
                 function getEmptyText() {
+                    if (root.controller?.activePluginName)
+                        return I18n.tr("No results found");
                     var mode = root.controller?.searchMode ?? "all";
                     var hasQuery = root.controller?.searchQuery?.length > 0;
 

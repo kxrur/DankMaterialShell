@@ -10,6 +10,7 @@ FocusScope {
     property var clearConfirmDialog: null
     property var surfaceHost: null
     property var transientSurfaceTracker: null
+    property bool popout: false
 
     property string activeTab: "recents"
     property bool showKeyboardHints: false
@@ -30,6 +31,7 @@ FocusScope {
     readonly property int selectedIndex: ClipboardService.selectedIndex
     readonly property bool keyboardNavigationActive: ClipboardService.keyboardNavigationActive
     readonly property bool clearsFilteredOnly: activeTab === "recents" && ClipboardService.filterActive
+    readonly property var currentEntry: selectedEntry()
 
     readonly property var modalFocusScope: root
     property alias searchField: historyContent.searchField
@@ -58,6 +60,11 @@ FocusScope {
         }
     }
     onSearchTextChanged: ClipboardService.searchText = searchText
+    onCurrentEntryChanged: {
+        if (mode === "preview" && !ClipboardService.canPreviewEntry(currentEntry)) {
+            closePreview();
+        }
+    }
 
     onActiveFilterChanged: {
         ClipboardService.activeFilter = activeFilter;
@@ -93,6 +100,12 @@ FocusScope {
         requestClose(false);
     }
 
+    function openSettings() {
+        const host = surfaceHost;
+        requestClose(false);
+        PopoutService.openSettingsWithTab("clipboard", host, () => host?.show());
+    }
+
     function pasteSelected() {
         const entry = selectedEntry();
         if (!entry)
@@ -110,6 +123,24 @@ FocusScope {
 
     function copyEntryAsText(entry) {
         ClipboardService.copyEntry(entry, () => root.requestClose(false), true);
+    }
+
+    function openPreview(index = selectedIndex) {
+        const entries = activeTab === "saved" ? pinnedEntries : unpinnedEntries;
+        if (!ClipboardService.canPreviewEntry(entries[index])) {
+            return;
+        }
+        ClipboardService.selectedIndex = index;
+        ClipboardService.keyboardNavigationActive = true;
+        mode = "preview";
+    }
+
+    function closePreview() {
+        if (mode !== "preview") {
+            return;
+        }
+        mode = "history";
+        searchField?.forceActiveFocus();
     }
 
     function selectedEntry() {
@@ -157,7 +188,7 @@ FocusScope {
             return;
         }
         const hasPinned = pinnedCount > 0;
-        const message = hasPinned ? I18n.tr("This will delete all unpinned entries. %1 pinned entries will be kept.").arg(pinnedCount) : I18n.tr("This will permanently delete all clipboard history.");
+        const message = hasPinned ? I18n.tr("This will delete all unpinned entries. %1 pinned entries will be kept.", "clear clipboard history confirmation, %1 is a count").arg(pinnedCount) : I18n.tr("This will permanently delete all clipboard history.");
         clearConfirmDialog.show(I18n.tr("Clear History?"), message, function () {
             clearAll();
             hide();
@@ -181,11 +212,46 @@ FocusScope {
     }
 
     function editEntry(entry) {
-        if (!entry || entry.isImage) {
+        if (!ClipboardService.canEditEntry(entry)) {
             return;
         }
-        editorView.setEntry(entry);
-        mode = "editor";
+
+        const requestedId = entry.id;
+        if (!requestedId) {
+            editorView.setEntry(entry);
+            mode = "editor";
+            return;
+        }
+
+        DMSService.sendRequest("clipboard.getEntry", {
+            "id": requestedId
+        }, function (response) {
+            if (response.error || !response.result) {
+                ToastService.showError(I18n.tr("Failed to load clipboard entry", "clipboard editor: fetching the entry's full text failed"));
+                if (!response.result) {
+                    ClipboardService.refresh();
+                }
+                return;
+            }
+            const result = response.result;
+            let fullText = "";
+            if (result?.data) {
+                fullText = editorView.decodeEntryData(result.data);
+            } else {
+                fullText = result?.preview ?? "";
+            }
+
+            if (!fullText && (entry.preview ?? "").length > 0) {
+                ToastService.showError(I18n.tr("Failed to load clipboard entry", "clipboard editor: fetching the entry's full text failed"));
+                return;
+            }
+
+            const entryWithText = Object.assign({}, entry, {
+                "text": fullText
+            });
+            editorView.setEntry(entryWithText);
+            mode = "editor";
+        });
     }
 
     function resetState() {
@@ -234,6 +300,21 @@ FocusScope {
         focus: root.mode === "editor"
         modal: root
         keyController: keyboardController
+    }
+
+    Loader {
+        id: previewLoader
+
+        anchors.fill: parent
+        z: 200
+        active: root.mode === "preview"
+        focus: root.mode === "preview"
+
+        sourceComponent: ClipboardImagePreview {
+            entry: root.currentEntry
+            focus: true
+            onCloseRequested: root.closePreview()
+        }
     }
 
     states: [

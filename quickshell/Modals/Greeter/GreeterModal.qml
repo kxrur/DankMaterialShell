@@ -144,33 +144,27 @@ DankFloatingWindow {
             }
         }
 
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: headerRow.height + Theme.spacingM
-            onPressed: windowControls.tryStartMove()
-            onDoubleClicked: windowControls.tryToggleMaximize()
-        }
-
-        Item {
+        DankWindowHeader {
             id: headerRow
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: Theme.spacingM
-            height: Math.round(Theme.fontSizeMedium * 2.85)
+            controls: windowControls
+            title: root.title
+            closeTooltipText: I18n.tr("Skip setup", "greeter skip button tooltip")
+            onCloseRequested: root.skip()
 
             Rectangle {
                 id: pageIndicatorContainer
                 readonly property real indicatorHeight: Math.round(Theme.fontSizeMedium * 2)
 
-                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 width: pageIndicatorRow.width + Theme.spacingM * 2
                 height: indicatorHeight
-                radius: indicatorHeight / 2
+                radius: Theme.fullRadius(width, height)
                 color: Theme.floatingWindowNestedSurface
+                border.width: Theme.layerOutlineWidth
+                border.color: Theme.outlineMedium
 
                 Row {
                     id: pageIndicatorRow
@@ -207,31 +201,6 @@ DankFloatingWindow {
                     }
                 }
             }
-
-            Row {
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Theme.spacingXS
-
-                DankActionButton {
-                    visible: windowControls.canMaximize
-                    iconName: root.maximized ? "fullscreen_exit" : "fullscreen"
-                    iconSize: Theme.iconSize - 4
-                    iconColor: Theme.surfaceText
-                    onClicked: windowControls.tryToggleMaximize()
-                }
-
-                DankActionButton {
-                    iconName: "close"
-                    iconSize: Theme.iconSize - 4
-                    iconColor: Theme.surfaceText
-                    onClicked: root.skip()
-
-                    DankTooltip {
-                        text: I18n.tr("Skip setup", "greeter skip button tooltip")
-                    }
-                }
-            }
         }
 
         Item {
@@ -239,7 +208,6 @@ DankFloatingWindow {
             anchors.right: parent.right
             anchors.top: headerRow.bottom
             anchors.bottom: footerRow.top
-            anchors.topMargin: Theme.spacingS
 
             Loader {
                 id: pageLoader
@@ -257,6 +225,8 @@ DankFloatingWindow {
             anchors.bottom: parent.bottom
             height: Math.round(Theme.fontSizeMedium * 4.5)
             color: Theme.floatingWindowNestedSurface
+            border.width: Theme.layerOutlineWidth
+            border.color: Theme.outlineMedium
 
             Rectangle {
                 anchors.top: parent.top
@@ -268,7 +238,7 @@ DankFloatingWindow {
 
             Row {
                 anchors.right: parent.right
-                anchors.rightMargin: Theme.spacingL
+                anchors.rightMargin: Theme.windowInset
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.spacingM
 
@@ -284,7 +254,7 @@ DankFloatingWindow {
                     visible: root.currentPage > 0
                     text: I18n.tr("Back", "greeter back button")
                     iconName: "arrow_back"
-                    backgroundColor: Theme.surfaceContainerHighest
+                    backgroundColor: Theme.chipSurface
                     textColor: Theme.surfaceText
                     onClicked: root.prevPage()
                 }

@@ -102,20 +102,6 @@ func TestConvertNiriRulesToWindowRules(t *testing.T) {
 	}
 }
 
-func TestNiriWritableProvider(t *testing.T) {
-	tmpDir := t.TempDir()
-	provider := NewNiriWritableProvider(tmpDir)
-
-	if provider.Name() != "niri" {
-		t.Errorf("Name() = %q, want niri", provider.Name())
-	}
-
-	expectedPath := filepath.Join(tmpDir, "dms", "windowrules.kdl")
-	if provider.GetOverridePath() != expectedPath {
-		t.Errorf("GetOverridePath() = %q, want %q", provider.GetOverridePath(), expectedPath)
-	}
-}
-
 func TestNiriSetAndLoadDMSRules(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := NewNiriWritableProvider(tmpDir)
@@ -384,5 +370,35 @@ window-rule {
 	}
 	if rules[1].Actions.OpenFloating == nil || *rules[1].Actions.OpenFloating {
 		t.Error("edited rule should have open-floating false")
+	}
+}
+
+func TestNiriParseIncludeNestedDMSRules(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "dms")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string]string{
+		filepath.Join(tmpDir, "config.kdl"):      "include \"dms/dms.kdl\"\n",
+		filepath.Join(subDir, "dms.kdl"):         "include \"windowrules.kdl\"\n",
+		filepath.Join(subDir, "windowrules.kdl"): "window-rule {\n    match app-id=\"nested\"\n    opacity 0.9\n}\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := ParseNiriWindowRules(tmpDir)
+	if err != nil {
+		t.Fatalf("ParseNiriWindowRules failed: %v", err)
+	}
+	if !result.DMSRulesIncluded {
+		t.Error("dms/windowrules.kdl included via dms/dms.kdl not detected")
+	}
+	if len(result.Rules) != 1 {
+		t.Errorf("expected 1 rule from the nested include, got %d", len(result.Rules))
 	}
 }

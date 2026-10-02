@@ -481,8 +481,9 @@ func (m *Manager) getPluginManifest(pluginPath string) *pluginManifest {
 }
 
 type pluginManifest struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Lyrics *LyricsProvider `json:"lyrics"`
 }
 
 func (m *Manager) GetPluginsDir() string {
@@ -668,6 +669,9 @@ func (m *Manager) HasUpdates(pluginID string, plugin Plugin) (hasUpdates bool, d
 	repoPath := pluginPath
 	if plugin.Path != "" {
 		repoPath = m.repositoryPath(pluginID, LockedPlugin{Repo: plugin.Repo, Path: plugin.Path})
+	}
+	if resolved, err := filepath.EvalSymlinks(repoPath); err == nil {
+		repoPath = resolved
 	}
 	hasUp, localHash, remoteHash, err := m.gitClient.HasUpdates(repoPath)
 

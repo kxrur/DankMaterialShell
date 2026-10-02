@@ -21,6 +21,16 @@ const DMS_ACTIONS = [
     { id: "spawn dms ipc call island open notificationcenter", label: "DankIsland: Open Notification Center" },
     { id: "spawn dms ipc call island cycle", label: "DankIsland: Cycle Activity" },
     { id: "spawn dms ipc call island close", label: "DankIsland: Close" },
+    { id: "spawn dms ipc call dot toggle home", label: "DankDot: Toggle" },
+    { id: "spawn dms ipc call dot open home", label: "DankDot: Open Clock" },
+    { id: "spawn dms ipc call dot open media", label: "DankDot: Open Media" },
+    { id: "spawn dms ipc call dot open launcher", label: "DankDot: Open Launcher" },
+    { id: "spawn dms ipc call dot open controlcenter", label: "DankDot: Open Control Center" },
+    { id: "spawn dms ipc call dot open wallpaper", label: "DankDot: Open Wallpapers" },
+    { id: "spawn dms ipc call dot open weather", label: "DankDot: Open Weather" },
+    { id: "spawn dms ipc call dot open notificationcenter", label: "DankDot: Open Notification Center" },
+    { id: "spawn dms ipc call dot cycle", label: "DankDot: Cycle Activity" },
+    { id: "spawn dms ipc call dot close", label: "DankDot: Close" },
     { id: "spawn dms ipc call defaultApp browser", label: "Default Web Browser: Open" },
     { id: "spawn dms ipc call defaultApp fileManager", label: "Default File Manager: Open" },
     { id: "spawn dms ipc call defaultApp mail", label: "Default Mail: Open" },
@@ -217,7 +227,9 @@ const NIRI_ACTIONS = {
     ],
     "Alt-Tab": [
         { id: "next-window", label: "Next Window" },
-        { id: "previous-window", label: "Previous Window" }
+        { id: "previous-window", label: "Previous Window" },
+        { id: "next-window filter=\"app-id\"", label: "Next Window (Same Application)" },
+        { id: "previous-window filter=\"app-id\"", label: "Previous Window (Same Application)" }
     ]
 };
 
@@ -386,6 +398,7 @@ const HYPRLAND_ACTIONS = {
         { id: "movetoworkspacesilent +1", label: "Move to Next (silent)" },
         { id: "movetoworkspacesilent -1", label: "Move to Previous (silent)" },
         { id: "togglespecialworkspace", label: "Toggle Special Workspace" },
+        { id: "movetoworkspace +0", label: "Move Out of Special Workspace" },
         { id: "focusworkspaceoncurrentmonitor", label: "Focus Workspace on Current Monitor" },
         { id: "renameworkspace", label: "Rename Workspace" }
     ],
@@ -921,8 +934,16 @@ function getActionLabel(action, compositor) {
             return compAct.label;
         var base = action.split(" ")[0];
         compAct = findCompositorAction(compositor, base);
-        if (compAct)
+        if (compAct) {
+            var arg = action.slice(base.length).trim();
+            if (arg && compAct.label.includes("(by index)")) {
+                return compAct.label.replace("(by index)", arg).trim();
+            }
+            if (arg.includes("filter=") && arg.includes("app-id")) {
+                return compAct.label + " (Same Application)";
+            }
             return compAct.label;
+        }
     }
 
     if (action.startsWith("spawn sh -c "))
@@ -937,7 +958,7 @@ function getActionType(action) {
         return "compositor";
     if (isDmsAction(action))
         return "dms";
-    if (/^spawn \w+ -c /.test(action) || action.startsWith("spawn_shell "))
+    if (/^spawn \w+ -c /.test(action) || action.startsWith("spawn_shell ") || action.startsWith("spawn-sh "))
         return "shell";
     if (action.startsWith("spawn "))
         return "spawn";
@@ -960,6 +981,8 @@ function isValidAction(action) {
         case "spawn sh -c ''":
         case "spawn_shell":
         case "spawn_shell ":
+        case "spawn-sh":
+        case "spawn-sh ":
             return false;
     }
     return true;
@@ -1016,6 +1039,12 @@ function parseShellCommand(action) {
     }
     if (action.startsWith("spawn_shell "))
         return action.slice(12);
+    if (action.startsWith("spawn-sh ")) {
+        var cmd = action.slice(9).trim();
+        if ((cmd.startsWith('"') && cmd.endsWith('"')) || (cmd.startsWith("'") && cmd.endsWith("'")))
+            cmd = cmd.slice(1, -1);
+        return cmd;
+    }
     return "";
 }
 

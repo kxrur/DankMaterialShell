@@ -50,20 +50,6 @@ Singleton {
         return false;
     }
 
-    function _isPopoutPresented(popout) {
-        if (!popout)
-            return false;
-        try {
-            if (popout.dashVisible !== undefined)
-                return !!popout.dashVisible;
-            if (popout.notificationHistoryVisible !== undefined)
-                return !!popout.notificationHistoryVisible;
-            return !!(popout.shouldBeVisible || popout.isClosing);
-        } catch (e) {
-            return false;
-        }
-    }
-
     function _openPopout(popout) {
         if (popout.dashVisible !== undefined) {
             let flagStayedTrue = popout.dashVisible === true;
@@ -240,7 +226,7 @@ Singleton {
     // Checks if the active popout is pinned for auto-dismissal
     function isActivePopoutPinned(screen) {
         const p = getActivePopout(screen);
-        if (!p || !_isPopoutPresented(p))
+        if (!p || !p.shouldBeVisible)
             return false;
         const dismissSuspended = p.effectiveHoverDismissSuspended ?? p.hoverDismissSuspended;
         return p.hoverDismissEnabled === false || dismissSuspended === true;
@@ -263,7 +249,7 @@ Singleton {
         const screenName = popout.screen.name;
         const currentPopout = currentPopoutsByScreen[screenName];
         const triggerId = triggerSource !== undefined ? triggerSource : tabIndex;
-        const alreadyPresented = currentPopout === popout && (hoverRequest ? _isPopoutPresented(popout) : popout.shouldBeVisible);
+        const alreadyPresented = currentPopout === popout && popout.shouldBeVisible;
 
         const willOpen = !(alreadyPresented && triggerId !== undefined && currentPopoutTriggers[screenName] === triggerId);
         if (willOpen)
@@ -350,5 +336,74 @@ Singleton {
 
     function requestHoverPopout(popout, tabIndex, triggerSource) {
         _requestPopout(popout, tabIndex, triggerSource, true);
+    }
+
+    function getActiveSurfaces() {
+        const results = [];
+
+        for (const screenName in currentPopoutsByScreen) {
+            const popout = currentPopoutsByScreen[screenName];
+            if (!popout || !popout.shouldBeVisible)
+                continue;
+
+            const host = popout.impl?.item ?? popout;
+            if (!host || !host.shouldBeVisible || host.isClosing)
+                continue;
+
+            const screen = host.surfaceScreen ?? popout.screen ?? null;
+            const sx = screen?.x ?? 0;
+            const sy = screen?.y ?? 0;
+            const px = host.renderedAlignedX;
+            const py = host.renderedAlignedY;
+            const pw = host.renderedAlignedWidth ?? popout.popupWidth ?? 0;
+            const ph = host.renderedAlignedHeight ?? popout.popupHeight ?? 0;
+
+            // Skip if origin is not yet laid out (undefined/null means not positioned).
+            if (px == null || py == null || pw <= 0 || ph <= 0)
+                continue;
+
+            results.push({
+                "name": popout.layerNamespace || "popout",
+                "type": "popout",
+                "x": Math.round(sx + px),
+                "y": Math.round(sy + py),
+                "width": Math.round(pw),
+                "height": Math.round(ph)
+            });
+        }
+
+        const modals = ModalManager.currentModalsByScreen || {};
+        for (const screenName in modals) {
+            const modal = modals[screenName];
+            if (!modal || !modal.shouldBeVisible)
+                continue;
+
+            const host = modal.impl?.item ?? modal;
+            if (!host || !host.shouldBeVisible || host.isClosing)
+                continue;
+
+            const screen = host.effectiveScreen ?? modal.targetScreen ?? null;
+            const sx = screen?.x ?? 0;
+            const sy = screen?.y ?? 0;
+            const mx = host.alignedX;
+            const my = host.alignedY;
+            const mw = host.alignedWidth ?? modal.modalWidth ?? 0;
+            const mh = host.alignedHeight ?? modal.modalHeight ?? 0;
+
+            // Skip if origin is not yet laid out.
+            if (mx == null || my == null || mw <= 0 || mh <= 0)
+                continue;
+
+            results.push({
+                "name": modal.layerNamespace || "modal",
+                "type": "modal",
+                "x": Math.round(sx + mx),
+                "y": Math.round(sy + my),
+                "width": Math.round(mw),
+                "height": Math.round(mh)
+            });
+        }
+
+        return results;
     }
 }

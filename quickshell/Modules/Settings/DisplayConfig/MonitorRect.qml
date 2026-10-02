@@ -2,6 +2,7 @@ import QtQuick
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modules.Settings.Widgets
 
 Rectangle {
     id: root
@@ -29,14 +30,14 @@ Rectangle {
 
     color: {
         if (!isConnected)
-            return Theme.floatingWindowFieldColor;
+            return SettingsMetrics.controlColor;
         if (!isValidPosition)
             return Theme.withAlpha(Theme.error, 0.3);
         if (isDragging)
             return Theme.withAlpha(Theme.primary, 0.4);
         if (dragArea.containsMouse)
             return Theme.withAlpha(Theme.primary, 0.2);
-        return Theme.floatingWindowNestedSurface;
+        return SettingsMetrics.controlColor;
     }
 
     border.color: {
@@ -50,7 +51,7 @@ Rectangle {
             return Theme.primary;
         return Theme.outline;
     }
-    border.width: isDragging ? 3 : 2
+    border.width: isDragging ? 3 : Theme.outlineWidthFocused
     z: isDragging ? 100 : (isConnected ? 1 : 0)
 
     Rectangle {
@@ -63,7 +64,7 @@ Rectangle {
         radius: Theme.cornerRadius
         color: "transparent"
         border.color: Theme.primary
-        border.width: 2
+        border.width: Theme.outlineWidthFocused
         opacity: 0.6
     }
 
@@ -81,7 +82,7 @@ Rectangle {
         StyledText {
             text: DisplayConfigState.getOutputDisplayName(root.outputData, root.outputName)
             font.pixelSize: Math.max(10, Math.min(14, root.width * 0.12))
-            font.weight: Font.Medium
+            font.weight: Theme.fontWeightMedium
             color: root.isConnected ? Theme.surfaceText : Theme.surfaceVariantText
             horizontalAlignment: Text.AlignHCenter
             anchors.horizontalCenter: parent.horizontalCenter

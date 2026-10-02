@@ -1,13 +1,13 @@
 import QtQuick
-import QtQuick.Effects
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Services.SystemTray
-import Quickshell.Wayland
-import Quickshell.Widgets
 import qs.Common
+import qs.Modules.DankBar
 import qs.Modules.Plugins
 import qs.Services
 import qs.Widgets
+import "../OverflowLayout.js" as OverflowLayout
 
 BasePill {
     id: root
@@ -19,12 +19,11 @@ BasePill {
     property var widgetData: null
     property string section: "right"
     property bool isAtBottom: false
-    property bool isAutoHideBar: false
     property bool useOverflowPopup: !widgetData?.trayUseInlineExpansion
-    property bool useSingleLineOverflowPopup: widgetData?.trayPopupSingleLine ?? SettingsData.trayPopupSingleLine
-    property bool useAutomaticOverflow: widgetData?.trayAutoOverflow ?? SettingsData.trayAutoOverflow
-    property int configuredMaxVisibleItems: widgetData?.trayMaxVisibleItems ?? SettingsData.trayMaxVisibleItems
-    property real configuredIconSpacing: Math.max(0, widgetData?.trayIconSpacing ?? SettingsData.trayIconSpacing)
+    property bool useSingleLineOverflowPopup: SettingsData.widgetOption("systemTray", widgetData, "trayPopupSingleLine")
+    property bool useAutomaticOverflow: SettingsData.widgetOption("systemTray", widgetData, "trayAutoOverflow")
+    property int configuredMaxVisibleItems: SettingsData.widgetOption("systemTray", widgetData, "trayMaxVisibleItems")
+    property real configuredIconSpacing: Math.max(0, SettingsData.widgetOption("systemTray", widgetData, "trayIconSpacing"))
     property real sectionAvailablePrimarySize: 0
     readonly property var hiddenTrayIds: {
         const envValue = Quickshell.env("DMS_HIDE_TRAYIDS") || "";
@@ -39,13 +38,33 @@ BasePill {
             return !hiddenTrayIds.includes(itemId.toLowerCase());
         });
     }
+    property var _trayKeyByItem: new Map()
     function getTrayItemKey(item) {
         const id = item?.id || "";
-        const tooltipTitle = item?.tooltipTitle || "";
-        if (!tooltipTitle || tooltipTitle === id) {
-            return id;
+        if (!id)
+            return "";
+        if (root._trayKeyByItem.has(item))
+            return root._trayKeyByItem.get(item);
+        const taken = new Set();
+        for (const live of root.allTrayItems) {
+            if (live !== item && (live?.id || "") === id && root._trayKeyByItem.has(live))
+                taken.add(root._trayKeyByItem.get(live));
         }
-        return `${id}::${tooltipTitle}`;
+        let key = id;
+        for (let n = 1; taken.has(key); n++)
+            key = `${id}::${n}`;
+        root._trayKeyByItem.set(item, key);
+        return key;
+    }
+
+    function resolveOrderIndex(key, orderMap) {
+        if (orderMap.has(key))
+            return orderMap.get(key);
+        return -1;
+    }
+
+    function isTrayIdHidden(key) {
+        return SessionData.isHiddenTrayId(key);
     }
 
     function trayIconSourceFor(trayItem) {
@@ -114,18 +133,8 @@ BasePill {
 
     function toggleIconName() {
         const edge = root.axis?.edge;
-        if (root.useOverflowPopup) {
-            switch (edge) {
-            case "left":
-                return root.menuOpen ? "keyboard_arrow_left" : "keyboard_arrow_right";
-            case "right":
-                return root.menuOpen ? "keyboard_arrow_right" : "keyboard_arrow_left";
-            case "bottom":
-                return root.menuOpen ? "keyboard_arrow_down" : "keyboard_arrow_up";
-            case "top":
-                return root.menuOpen ? "keyboard_arrow_up" : "keyboard_arrow_down";
-            }
-        }
+        if (root.useOverflowPopup)
+            return OverflowLayout.expanderIcon(edge, root.menuOpen);
 
         if (edge === "left" || edge === "right") {
             return root.menuOpen == (root.section !== "right") ? "keyboard_arrow_up" : "keyboard_arrow_down";
@@ -149,6 +158,13 @@ BasePill {
         }
     }
 
+    Connections {
+        target: SystemTray
+        function onItemUnregistered(item) {
+            root._trayKeyByItem.delete(item);
+        }
+    }
+
     function sortByPreferredOrder(items, trigger) {
         void trigger;
         const savedOrder = SessionData.trayItemOrder || [];
@@ -158,15 +174,17 @@ BasePill {
         return [...items].sort((a, b) => {
             const keyA = getTrayItemKey(a);
             const keyB = getTrayItemKey(b);
-            const orderA = orderMap.has(keyA) ? orderMap.get(keyA) : 10000 + items.indexOf(a);
-            const orderB = orderMap.has(keyB) ? orderMap.get(keyB) : 10000 + items.indexOf(b);
-            return orderA - orderB;
+            const orderA = resolveOrderIndex(keyA, orderMap);
+            const orderB = resolveOrderIndex(keyB, orderMap);
+            const posA = orderA >= 0 ? orderA : 10000 + items.indexOf(a);
+            const posB = orderB >= 0 ? orderB : 10000 + items.indexOf(b);
+            return posA - posB;
         });
     }
 
     readonly property var allSortedTrayItems: sortByPreferredOrder(allTrayItems, _trayOrderTrigger)
     readonly property var allSortedTrayItemKeys: allSortedTrayItems.map(item => getTrayItemKey(item))
-    readonly property var visibleSortedTrayItems: allSortedTrayItems.filter(item => !SessionData.isHiddenTrayId(root.getTrayItemKey(item)))
+    readonly property var visibleSortedTrayItems: allSortedTrayItems.filter(item => !root.isTrayIdHidden(root.getTrayItemKey(item)))
     readonly property int automaticVisibleItemLimit: {
         if (!root.useAutomaticOverflow)
             return root.visibleSortedTrayItems.length;
@@ -189,7 +207,7 @@ BasePill {
                 item: item
             }))
     readonly property var autoOverflowBarItems: visibleSortedTrayItems.slice(automaticVisibleItemLimit)
-    readonly property var manualHiddenBarItems: allSortedTrayItems.filter(item => SessionData.isHiddenTrayId(root.getTrayItemKey(item)))
+    readonly property var manualHiddenBarItems: allSortedTrayItems.filter(item => root.isTrayIdHidden(root.getTrayItemKey(item)))
     readonly property var hiddenBarItemKeys: manualHiddenBarItems.concat(autoOverflowBarItems).map(item => root.getTrayItemKey(item))
     readonly property var hiddenBarItems: allSortedTrayItems.filter(item => hiddenBarItemKeys.indexOf(root.getTrayItemKey(item)) !== -1)
     readonly property string trayIconTintMode: {
@@ -297,7 +315,7 @@ BasePill {
     }
 
     function isManualHiddenTrayItem(item) {
-        return SessionData.isHiddenTrayId(getTrayItemKey(item));
+        return root.isTrayIdHidden(root.getTrayItemKey(item));
     }
 
     function isAutoOverflowTrayItem(item) {
@@ -414,24 +432,8 @@ BasePill {
         }
     }
 
-    readonly property real trayItemSize: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale) + 6
-
-    readonly property real minTooltipY: {
-        if (!parentScreen || !isVerticalOrientation) {
-            return 0;
-        }
-
-        if (isAutoHideBar) {
-            return 0;
-        }
-
-        if (parentScreen.y > 0) {
-            const estimatedTopBarHeight = barThickness + barSpacing;
-            return estimatedTopBarHeight;
-        }
-
-        return 0;
-    }
+    readonly property real trayIconSize: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
+    readonly property real trayItemSize: trayIconSize + Theme.spacingXS + Theme.spacingXXS
 
     readonly property string autoBarShadowDirection: {
         const edge = root.axis?.edge;
@@ -455,10 +457,8 @@ BasePill {
     function _openOverflowAt(triggerItem) {
         if (!triggerItem || !root.parentScreen)
             return;
-        const barPosition = root.axis?.edge === "left" ? 2 : (root.axis?.edge === "right" ? 3 : (root.axis?.edge === "top" ? 0 : 1));
-        const triggerPos = triggerItem.mapToItem(null, 0, root.isVerticalOrientation ? (triggerItem.height / 2 + root.minTooltipY) : 0);
-        const pos = SettingsData.getPopupTriggerPosition(triggerPos, root.parentScreen, root.barThickness, triggerItem.width, root.barSpacing, barPosition, root.barConfig);
-        overflowPopout.setTriggerPosition(pos.x, pos.y, pos.width, root.section, root.parentScreen, barPosition, root.barThickness, root.barSpacing, root.barConfig);
+        if (!root.positionPopout(overflowPopout, triggerItem, root.isVerticalOrientation ? triggerItem.height : triggerItem.width))
+            return;
         root.menuOpen = true;
         PopoutManager.requestPopout(overflowPopout, undefined, "tray-overflow-" + root.section);
     }
@@ -525,8 +525,12 @@ BasePill {
 
     Connections {
         target: overflowPopout
-        function onBackgroundClicked() { root.menuOpen = false; }
-        function onPopoutClosed() { root.menuOpen = false; }
+        function onBackgroundClicked() {
+            root.menuOpen = false;
+        }
+        function onPopoutClosed() {
+            root.menuOpen = false;
+        }
     }
 
     function _unregisterMenuIfMatches(targetMenu) {
@@ -575,174 +579,7 @@ BasePill {
                     objectProp: "key"
                 }
 
-                delegate: Item {
-                    id: delegateRoot
-                    property var trayItem: modelData.item
-                    property string itemKey: modelData.key
-                    property string iconSource: root.trayIconSourceFor(trayItem)
-
-                    width: root.trayItemSize
-                    height: root.barThickness
-                    z: dragHandler.dragging ? 100 : 0
-
-                    property real shiftOffset: root.dragShiftOffset(index, root.draggedIndex, root.dropTargetIndex, root.trayItemSize + root.configuredIconSpacing)
-
-                    transform: Translate {
-                        x: delegateRoot.shiftOffset
-                        Behavior on x {
-                            enabled: !root.suppressShiftAnimation
-                            NumberAnimation {
-                                duration: 150
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-                    }
-
-                    Item {
-                        id: dragHandler
-                        anchors.fill: parent
-                        property bool dragging: false
-                        property point dragStartPos: Qt.point(0, 0)
-                        property real dragAxisOffset: 0
-                        property bool longPressing: false
-
-                        Timer {
-                            id: longPressTimer
-                            interval: 400
-                            repeat: false
-                            onTriggered: dragHandler.longPressing = true
-                        }
-                    }
-
-                    Rectangle {
-                        id: visualContent
-                        width: root.trayItemSize
-                        height: root.trayItemSize
-                        anchors.centerIn: parent
-                        radius: Theme.cornerRadius
-                        color: trayItemArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(BlurService.hoverColor(Theme.widgetBaseHoverColor), 0)
-                        border.width: dragHandler.dragging ? 2 : 0
-                        border.color: Theme.primary
-                        opacity: dragHandler.dragging ? 0.8 : 1.0
-
-                        transform: Translate {
-                            x: dragHandler.dragging ? dragHandler.dragAxisOffset : 0
-                        }
-
-                        IconImage {
-                            id: iconImg
-                            anchors.centerIn: parent
-                            width: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                            height: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                            source: delegateRoot.iconSource
-                            asynchronous: true
-                            smooth: true
-                            mipmap: true
-                            visible: status === Image.Ready
-                            layer.enabled: root.trayIconTintEnabled
-                            layer.effect: MultiEffect {
-                                saturation: root.trayIconSaturation
-                                colorization: root.trayIconColorization
-                                colorizationColor: root.trayIconTintColor
-                            }
-                        }
-
-                        StyledText {
-                            anchors.centerIn: parent
-                            visible: !iconImg.visible
-                            text: {
-                                const itemId = trayItem?.id || "";
-                                if (!itemId)
-                                    return "?";
-                                return itemId.charAt(0).toUpperCase();
-                            }
-                            font.pixelSize: 10
-                            color: Theme.widgetTextColor
-                        }
-
-                        DankRipple {
-                            id: itemRipple
-                            cornerRadius: Theme.cornerRadius
-                        }
-                    }
-
-                    MouseArea {
-                        id: trayItemArea
-                        y: root.isVerticalOrientation ? 0 : -root.topMargin
-                        x: root.isVerticalOrientation ? -root.leftMargin : 0
-                        width: parent.width + (root.isVerticalOrientation ? root.leftMargin + root.rightMargin : 0)
-                        height: parent.height + (root.isVerticalOrientation ? 0 : root.topMargin + root.bottomMargin)
-                        hoverEnabled: true
-                        acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        cursorShape: dragHandler.longPressing ? Qt.DragMoveCursor : Qt.PointingHandCursor
-
-                        onPressed: mouse => {
-                            const pos = mapToItem(visualContent, mouse.x, mouse.y);
-                            itemRipple.trigger(pos.x, pos.y);
-                            if (mouse.button === Qt.LeftButton) {
-                                dragHandler.dragStartPos = Qt.point(mouse.x, mouse.y);
-                                longPressTimer.start();
-                            }
-                        }
-
-                        onReleased: mouse => {
-                            longPressTimer.stop();
-                            const wasDragging = dragHandler.dragging;
-                            if (wasDragging)
-                                root.finishMainDrag();
-
-                            dragHandler.longPressing = false;
-                            dragHandler.dragging = false;
-                            dragHandler.dragAxisOffset = 0;
-
-                            if (wasDragging || mouse.button !== Qt.LeftButton)
-                                return;
-
-                            if (!delegateRoot.trayItem)
-                                return;
-                            if (!delegateRoot.trayItem.onlyMenu) {
-                                delegateRoot.trayItem.activate();
-                                return;
-                            }
-                            if (!delegateRoot.trayItem.hasMenu)
-                                return;
-                            if (root.useOverflowPopup)
-                                root.menuOpen = false;
-                            root.showForTrayItem(delegateRoot.trayItem, visualContent, parentScreen, root.isAtBottom, root.isVerticalOrientation, root.axis);
-                        }
-
-                        onPositionChanged: mouse => {
-                            if (dragHandler.longPressing && !dragHandler.dragging) {
-                                const distance = Math.abs(mouse.x - dragHandler.dragStartPos.x);
-                                if (distance > 5) {
-                                    dragHandler.dragging = true;
-                                    root.beginMainDrag(index, root.reverseInlineHorizontal);
-                                }
-                            }
-                            if (!dragHandler.dragging)
-                                return;
-
-                            const axisOffset = mouse.x - dragHandler.dragStartPos.x;
-                            dragHandler.dragAxisOffset = axisOffset;
-                            root.updateMainDrag(axisOffset, index, root.reverseInlineHorizontal);
-                        }
-
-                        onClicked: mouse => {
-                            if (dragHandler.dragging)
-                                return;
-                            if (mouse.button !== Qt.RightButton)
-                                return;
-                            if (!delegateRoot.trayItem?.hasMenu) {
-                                const gp = trayItemArea.mapToGlobal(mouse.x, mouse.y);
-                                root.callContextMenuFallback(delegateRoot.trayItem.id, Math.round(gp.x), Math.round(gp.y));
-                                return;
-                            }
-                            if (root.useOverflowPopup)
-                                root.menuOpen = false;
-                            root.showForTrayItem(delegateRoot.trayItem, visualContent, parentScreen, root.isAtBottom, root.isVerticalOrientation, root.axis);
-                        }
-                    }
-                }
+                delegate: mainTrayItemDelegate
             }
 
             Item {
@@ -750,24 +587,25 @@ BasePill {
                 height: root.barThickness
                 visible: root.hasHiddenItems
 
-                Rectangle {
+                BarPillSurface {
                     id: caretButton
                     width: root.trayItemSize
                     height: root.trayItemSize
                     anchors.centerIn: parent
-                    radius: Theme.cornerRadius
-                    color: caretArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(BlurService.hoverColor(Theme.widgetBaseHoverColor), 0)
+                    style: BarMetrics.widgetStyle(root.barConfig)
+                    pressed: caretArea.pressed
+                    color: Theme.withAlpha(Theme.onSurface, caretArea.pressed ? Theme.stateLayerPressed : caretArea.containsMouse ? Theme.stateLayerHover : 0)
 
                     DankIcon {
                         anchors.centerIn: parent
                         name: root.toggleIconName()
-                        size: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
+                        size: root.trayIconSize
                         color: Theme.widgetTextColor
                     }
 
                     DankRipple {
                         id: caretRipple
-                        cornerRadius: Theme.cornerRadius
+                        cornerRadius: caretButton.radius
                     }
 
                     MouseArea {
@@ -832,14 +670,15 @@ BasePill {
                 }
             }
 
-            Rectangle {
+            BarPillSurface {
                 id: inlineVisualContent
                 width: root.trayItemSize
                 height: root.trayItemSize
                 x: root.isVerticalOrientation ? Math.round((parent.width - width) / 2) : (root.reverseInlineHorizontal ? parent.width - width : 0)
                 y: root.isVerticalOrientation ? (root.reverseInlineVertical ? parent.height - height : 0) : Math.round((parent.height - height) / 2)
-                radius: Theme.cornerRadius
-                color: inlineTrayItemArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(BlurService.hoverColor(Theme.widgetBaseHoverColor), 0)
+                style: BarMetrics.widgetStyle(root.barConfig)
+                pressed: inlineTrayItemArea.pressed
+                color: Theme.withAlpha(Theme.onSurface, inlineTrayItemArea.pressed ? Theme.stateLayerPressed : inlineTrayItemArea.containsMouse ? Theme.stateLayerHover : 0)
                 opacity: root.inlineExpanded ? 1 : 0
 
                 Behavior on opacity {
@@ -849,40 +688,16 @@ BasePill {
                     }
                 }
 
-                IconImage {
-                    id: inlineIconImg
-                    anchors.centerIn: parent
-                    width: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                    height: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
+                TrayItemIcon {
+                    anchors.fill: parent
+                    tray: root
+                    trayItem: trayItem
                     source: iconSource
-                    asynchronous: true
-                    smooth: true
-                    mipmap: true
-                    visible: status === Image.Ready
-                    layer.enabled: root.trayIconTintEnabled
-                    layer.effect: MultiEffect {
-                        saturation: root.trayIconSaturation
-                        colorization: root.trayIconColorization
-                        colorizationColor: root.trayIconTintColor
-                    }
-                }
-
-                StyledText {
-                    anchors.centerIn: parent
-                    visible: !inlineIconImg.visible
-                    text: {
-                        const itemId = trayItem?.id || "";
-                        if (!itemId)
-                            return "?";
-                        return itemId.charAt(0).toUpperCase();
-                    }
-                    font.pixelSize: 10
-                    color: Theme.widgetTextColor
                 }
 
                 DankRipple {
                     id: inlineItemRipple
-                    cornerRadius: Theme.cornerRadius
+                    cornerRadius: inlineVisualContent.radius
                 }
             }
 
@@ -916,21 +731,30 @@ BasePill {
     }
 
     Component {
-        id: verticalMainTrayItemDelegate
+        id: mainTrayItemDelegate
 
         Item {
+            id: delegateRoot
             property var trayItem: modelData.item
             property string itemKey: modelData.key
             property string iconSource: root.trayIconSourceFor(trayItem)
 
-            width: root.barThickness
-            height: root.trayItemSize
+            width: root.isVerticalOrientation ? root.barThickness : root.trayItemSize
+            height: root.isVerticalOrientation ? root.trayItemSize : root.barThickness
             z: dragHandler.dragging ? 100 : 0
 
             property real shiftOffset: root.dragShiftOffset(index, root.draggedIndex, root.dropTargetIndex, root.trayItemSize + root.configuredIconSpacing)
 
             transform: Translate {
-                y: shiftOffset
+                x: root.isVerticalOrientation ? 0 : delegateRoot.shiftOffset
+                y: root.isVerticalOrientation ? delegateRoot.shiftOffset : 0
+                Behavior on x {
+                    enabled: !root.suppressShiftAnimation
+                    NumberAnimation {
+                        duration: 150
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 Behavior on y {
                     enabled: !root.suppressShiftAnimation
                     NumberAnimation {
@@ -956,55 +780,43 @@ BasePill {
                 }
             }
 
-            Rectangle {
+            readonly property int groupCount: root.displayedMainBarItems.length
+            readonly property bool reversedRow: !root.isVerticalOrientation && root.reverseInlineHorizontal
+            readonly property bool atStart: reversedRow ? index === groupCount - 1 : index === 0
+            readonly property bool atEnd: reversedRow ? index === 0 : index === groupCount - 1
+            BarPillSurface {
                 id: visualContent
                 width: root.trayItemSize
                 height: root.trayItemSize
                 anchors.centerIn: parent
-                radius: Theme.cornerRadius
-                color: trayItemArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(BlurService.hoverColor(Theme.widgetBaseHoverColor), 0)
-                border.width: dragHandler.dragging ? 2 : 0
+                style: BarMetrics.widgetStyle(root.barConfig)
+                vertical: root.isVerticalOrientation
+                joinedStart: style === "segments" && !delegateRoot.atStart
+                joinedEnd: style === "segments" && !delegateRoot.atEnd
+                pressed: trayItemArea.pressed
+                color: Theme.withAlpha(Theme.onSurface, trayItemArea.pressed ? Theme.stateLayerPressed : trayItemArea.containsMouse ? Theme.stateLayerHover : 0)
+                border.width: dragHandler.dragging ? Theme.outlineWidthFocused : 0
                 border.color: Theme.primary
                 opacity: dragHandler.dragging ? 0.8 : 1.0
 
                 transform: Translate {
-                    y: dragHandler.dragging ? dragHandler.dragAxisOffset : 0
+                    x: dragHandler.dragging && !root.isVerticalOrientation ? dragHandler.dragAxisOffset : 0
+                    y: dragHandler.dragging && root.isVerticalOrientation ? dragHandler.dragAxisOffset : 0
                 }
 
-                IconImage {
-                    id: iconImg
-                    anchors.centerIn: parent
-                    width: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                    height: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                    source: iconSource
-                    asynchronous: true
-                    smooth: true
-                    mipmap: true
-                    visible: status === Image.Ready
-                    layer.enabled: root.trayIconTintEnabled
-                    layer.effect: MultiEffect {
-                        saturation: root.trayIconSaturation
-                        colorization: root.trayIconColorization
-                        colorizationColor: root.trayIconTintColor
-                    }
-                }
-
-                StyledText {
-                    anchors.centerIn: parent
-                    visible: !iconImg.visible
-                    text: {
-                        const itemId = trayItem?.id || "";
-                        if (!itemId)
-                            return "?";
-                        return itemId.charAt(0).toUpperCase();
-                    }
-                    font.pixelSize: 10
-                    color: Theme.widgetTextColor
+                TrayItemIcon {
+                    anchors.fill: parent
+                    tray: root
+                    trayItem: delegateRoot.trayItem
+                    source: delegateRoot.iconSource
                 }
 
                 DankRipple {
                     id: itemRipple
-                    cornerRadius: Theme.cornerRadius
+                    topLeftRadius: visualContent.topLeftRadius
+                    topRightRadius: visualContent.topRightRadius
+                    bottomLeftRadius: visualContent.bottomLeftRadius
+                    bottomRightRadius: visualContent.bottomRightRadius
                 }
             }
 
@@ -1040,33 +852,30 @@ BasePill {
                     if (wasDragging || mouse.button !== Qt.LeftButton)
                         return;
 
-                    if (!trayItem)
+                    if (!delegateRoot.trayItem)
                         return;
-                    if (!trayItem.onlyMenu) {
-                        trayItem.activate();
+                    if (!delegateRoot.trayItem.onlyMenu) {
+                        delegateRoot.trayItem.activate();
                         return;
                     }
-                    if (!trayItem.hasMenu)
+                    if (!delegateRoot.trayItem.hasMenu)
                         return;
                     if (root.useOverflowPopup)
                         root.menuOpen = false;
-                    root.showForTrayItem(trayItem, visualContent, parentScreen, root.isAtBottom, root.isVerticalOrientation, root.axis);
+                    root.showForTrayItem(delegateRoot.trayItem, visualContent, parentScreen, root.isAtBottom, root.isVerticalOrientation, root.axis);
                 }
 
                 onPositionChanged: mouse => {
-                    if (dragHandler.longPressing && !dragHandler.dragging) {
-                        const distance = Math.abs(mouse.y - dragHandler.dragStartPos.y);
-                        if (distance > 5) {
-                            dragHandler.dragging = true;
-                            root.beginMainDrag(index, false);
-                        }
+                    const axisOffset = root.isVerticalOrientation ? (mouse.y - dragHandler.dragStartPos.y) : (mouse.x - dragHandler.dragStartPos.x);
+                    if (dragHandler.longPressing && !dragHandler.dragging && Math.abs(axisOffset) > 5) {
+                        dragHandler.dragging = true;
+                        root.beginMainDrag(index, root.reverseInlineHorizontal);
                     }
                     if (!dragHandler.dragging)
                         return;
 
-                    const axisOffset = mouse.y - dragHandler.dragStartPos.y;
                     dragHandler.dragAxisOffset = axisOffset;
-                    root.updateMainDrag(axisOffset, index, false);
+                    root.updateMainDrag(axisOffset, index, root.reverseInlineHorizontal);
                 }
 
                 onClicked: mouse => {
@@ -1074,7 +883,14 @@ BasePill {
                         return;
                     if (mouse.button !== Qt.RightButton)
                         return;
-                    root.openInlineTrayContextMenu(trayItem, trayItemArea, mouse, visualContent);
+                    if (!delegateRoot.trayItem?.hasMenu) {
+                        const gp = trayItemArea.mapToGlobal(mouse.x, mouse.y);
+                        root.callContextMenuFallback(delegateRoot.trayItem.id, Math.round(gp.x), Math.round(gp.y));
+                        return;
+                    }
+                    if (root.useOverflowPopup)
+                        root.menuOpen = false;
+                    root.showForTrayItem(delegateRoot.trayItem, visualContent, parentScreen, root.isAtBottom, root.isVerticalOrientation, root.axis);
                 }
             }
         }
@@ -1093,7 +909,7 @@ BasePill {
                     values: root.reverseInlineVertical ? [] : root.displayedMainBarItems
                     objectProp: "key"
                 }
-                delegate: verticalMainTrayItemDelegate
+                delegate: mainTrayItemDelegate
             }
 
             Repeater {
@@ -1109,24 +925,25 @@ BasePill {
                 height: root.trayItemSize
                 visible: root.hasHiddenItems
 
-                Rectangle {
+                BarPillSurface {
                     id: caretButtonVert
                     width: root.trayItemSize
                     height: root.trayItemSize
                     anchors.centerIn: parent
-                    radius: Theme.cornerRadius
-                    color: caretAreaVert.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(BlurService.hoverColor(Theme.widgetBaseHoverColor), 0)
+                    style: BarMetrics.widgetStyle(root.barConfig)
+                    pressed: caretAreaVert.pressed
+                    color: Theme.withAlpha(Theme.onSurface, caretAreaVert.pressed ? Theme.stateLayerPressed : caretAreaVert.containsMouse ? Theme.stateLayerHover : 0)
 
                     DankIcon {
                         anchors.centerIn: parent
                         name: root.toggleIconName()
-                        size: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
+                        size: root.trayIconSize
                         color: Theme.widgetTextColor
                     }
 
                     DankRipple {
                         id: caretRippleVert
-                        cornerRadius: Theme.cornerRadius
+                        cornerRadius: caretButtonVert.radius
                     }
 
                     MouseArea {
@@ -1165,7 +982,7 @@ BasePill {
                     values: root.reverseInlineVertical ? root.displayedMainBarItems : []
                     objectProp: "key"
                 }
-                delegate: verticalMainTrayItemDelegate
+                delegate: mainTrayItemDelegate
             }
         }
     }
@@ -1205,7 +1022,7 @@ BasePill {
                     Repeater {
                         model: root.hiddenBarItems
 
-                        delegate: Rectangle {
+                        delegate: BarPillSurface {
                             id: overflowItemRoot
                             property var trayItem: modelData
                             property string itemKey: root.getTrayItemKey(trayItem)
@@ -1214,9 +1031,10 @@ BasePill {
                             width: root.trayItemSize + 4
                             height: root.trayItemSize + 4
                             z: popupDragHandler.dragging ? 100 : 0
-                            radius: Theme.cornerRadius
-                            color: itemArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(Theme.surfaceContainer, 0)
-                            border.width: popupDragHandler.dragging ? 2 : 0
+                            style: BarMetrics.widgetStyle(root.barConfig)
+                            pressed: itemArea.pressed
+                            color: Theme.withAlpha(Theme.onSurface, itemArea.pressed ? Theme.stateLayerPressed : itemArea.containsMouse ? Theme.stateLayerHover : 0)
+                            border.width: popupDragHandler.dragging ? Theme.outlineWidthFocused : 0
                             border.color: Theme.primary
                             opacity: popupDragHandler.dragging ? 0.8 : 1.0
 
@@ -1228,14 +1046,14 @@ BasePill {
                                 Behavior on x {
                                     enabled: !root.suppressShiftAnimation && !overflowContent.popupUsesVerticalLine
                                     NumberAnimation {
-                                        duration: 150
+                                        duration: Theme.shortDuration
                                         easing.type: Easing.OutCubic
                                     }
                                 }
                                 Behavior on y {
                                     enabled: !root.suppressShiftAnimation && overflowContent.popupUsesVerticalLine
                                     NumberAnimation {
-                                        duration: 150
+                                        duration: Theme.shortDuration
                                         easing.type: Easing.OutCubic
                                     }
                                 }
@@ -1257,35 +1075,11 @@ BasePill {
                                 }
                             }
 
-                            IconImage {
-                                id: menuIconImg
-                                anchors.centerIn: parent
-                                width: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                                height: Theme.barIconSize(root.barThickness, undefined, root.barConfig?.maximizeWidgetIcons, root.barConfig?.iconScale)
-                                source: parent.iconSource
-                                asynchronous: true
-                                smooth: true
-                                mipmap: true
-                                visible: status === Image.Ready
-                                layer.enabled: root.trayIconTintEnabled
-                                layer.effect: MultiEffect {
-                                    saturation: root.trayIconSaturation
-                                    colorization: root.trayIconColorization
-                                    colorizationColor: root.trayIconTintColor
-                                }
-                            }
-
-                            StyledText {
-                                anchors.centerIn: parent
-                                visible: !menuIconImg.visible
-                                text: {
-                                    const itemId = trayItem?.id || "";
-                                    if (!itemId)
-                                        return "?";
-                                    return itemId.charAt(0).toUpperCase();
-                                }
-                                font.pixelSize: 10
-                                color: Theme.widgetTextColor
+                            TrayItemIcon {
+                                anchors.fill: parent
+                                tray: root
+                                trayItem: overflowItemRoot.trayItem
+                                source: overflowItemRoot.iconSource
                             }
 
                             MouseArea {
@@ -1368,12 +1162,22 @@ BasePill {
         }
     }
 
-    Binding { target: trayMenuPopout; property: "popupWidth";  value: trayMenuState.computedWidth }
-    Binding { target: trayMenuPopout; property: "popupHeight"; value: trayMenuState.computedHeight }
+    Binding {
+        target: trayMenuPopout
+        property: "popupWidth"
+        value: trayMenuState.computedWidth
+    }
+    Binding {
+        target: trayMenuPopout
+        property: "popupHeight"
+        value: trayMenuState.computedHeight
+    }
 
     Connections {
         target: trayMenuPopout
-        function onBackgroundClicked() { trayMenuState.close(); }
+        function onBackgroundClicked() {
+            trayMenuState.close();
+        }
         function onPopoutClosed() {
             trayMenuState.showMenu = false;
             root._unregisterMenuIfMatches(trayMenuPopout);
@@ -1395,38 +1199,44 @@ BasePill {
             focus: true
             property alias entryStack: entryStack
 
-            readonly property real _rawW: Math.min(500, Math.max(250, menuColumn.implicitWidth + Theme.spacingS * 2))
-            readonly property real _rawH: Math.min(
-                Math.max(40, menuColumn.implicitHeight + Theme.spacingS * 2),
-                Math.max(40, (root.parentScreen?.height || 1080) - 20)
-            )
+            readonly property real _rawW: Math.min(Theme.launcherWidthMicro, Math.max(Theme.fieldDefaultWidth, menuColumn.implicitWidth + Theme.spacingS * 2))
+            readonly property real _rawH: Math.min(Math.max(Theme.menuItemHeight, menuColumn.implicitHeight + Theme.spacingS * 2), Math.max(Theme.menuItemHeight, (root.parentScreen?.height || Theme.launcherHeightDefault) - Theme.spacingXL))
 
             implicitWidth: _rawW
             implicitHeight: _rawH
 
-            onImplicitWidthChanged:  trayMenuState.computedWidth  = implicitWidth
+            onImplicitWidthChanged: trayMenuState.computedWidth = implicitWidth
             onImplicitHeightChanged: trayMenuState.computedHeight = implicitHeight
             Component.onCompleted: {
-                trayMenuState.computedWidth  = implicitWidth;
+                trayMenuState.computedWidth = implicitWidth;
                 trayMenuState.computedHeight = implicitHeight;
                 forceActiveFocus();
             }
 
-            ListModel { id: entryStack }
-            function topEntry() { return entryStack.count ? entryStack.get(entryStack.count - 1).handle : null; }
+            ListModel {
+                id: entryStack
+            }
+            function topEntry() {
+                return entryStack.count ? entryStack.get(entryStack.count - 1).handle : null;
+            }
 
             function showSubMenu(entry) {
-                if (!entry || !entry.hasChildren) return;
-                entryStack.append({ handle: entry });
+                if (!entry || !entry.hasChildren)
+                    return;
+                entryStack.append({
+                    handle: entry
+                });
                 const h = entry.menu || entry;
-                if (h && typeof h.updateLayout === "function") h.updateLayout();
+                if (h && typeof h.updateLayout === "function")
+                    h.updateLayout();
                 submenuHydrator.menu = h;
                 submenuHydrator.open();
                 Qt.callLater(() => submenuHydrator.close());
             }
 
             function goBack() {
-                if (!entryStack.count) return;
+                if (!entryStack.count)
+                    return;
                 entryStack.remove(entryStack.count - 1);
             }
 
@@ -1449,8 +1259,10 @@ BasePill {
             }
 
             Keys.onEscapePressed: {
-                if (entryStack.count > 0) goBack();
-                else trayMenuState.close();
+                if (entryStack.count > 0)
+                    goBack();
+                else
+                    trayMenuState.close();
             }
 
             DankFlickable {
@@ -1465,14 +1277,14 @@ BasePill {
                 Column {
                     id: menuColumn
                     width: menuFlickable.width
-                    spacing: 1
+                    spacing: 0
 
                     Rectangle {
                         visible: entryStack.count === 0
                         width: parent.width
-                        height: 28
-                        radius: Theme.cornerRadius
-                        color: visibilityToggleArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(Theme.surfaceContainer, 0)
+                        height: BarMetrics.menuRowHeight
+                        radius: BarMetrics.menuItemRadius
+                        color: Theme.withAlpha(Theme.onSurface, visibilityToggleArea.pressed ? Theme.stateLayerPressed : visibilityToggleArea.containsMouse ? Theme.stateLayerHover : 0)
 
                         StyledText {
                             anchors.left: parent.left
@@ -1512,7 +1324,8 @@ BasePill {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 const itemKey = root.getTrayItemKey(trayMenuState.trayItem);
-                                if (!itemKey) return;
+                                if (!itemKey)
+                                    return;
                                 if (root.isAutoOverflowTrayItem(trayMenuState.trayItem)) {
                                     root.promoteTrayItemToBar(trayMenuState.trayItem);
                                 } else if (root.isManualHiddenTrayItem(trayMenuState.trayItem)) {
@@ -1528,16 +1341,16 @@ BasePill {
                     Rectangle {
                         visible: entryStack.count === 0
                         width: parent.width
-                        height: 1
+                        height: Theme.dividerWidth
                         color: Theme.outlineHeavy
                     }
 
                     Rectangle {
                         visible: entryStack.count > 0
                         width: parent.width
-                        height: 28
-                        radius: Theme.cornerRadius
-                        color: backArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(Theme.surfaceContainer, 0)
+                        height: BarMetrics.menuRowHeight
+                        radius: BarMetrics.menuItemRadius
+                        color: Theme.withAlpha(Theme.onSurface, backArea.pressed ? Theme.stateLayerPressed : backArea.containsMouse ? Theme.stateLayerHover : 0)
 
                         Row {
                             anchors.left: parent.left
@@ -1572,7 +1385,7 @@ BasePill {
                     Rectangle {
                         visible: entryStack.count > 0
                         width: parent.width
-                        height: 1
+                        height: Theme.dividerWidth
                         color: Theme.outlineHeavy
                     }
 
@@ -1583,11 +1396,12 @@ BasePill {
                             property var menuEntry: modelData
 
                             width: menuColumn.width
-                            height: menuEntry?.isSeparator ? 1 : 28
-                            radius: menuEntry?.isSeparator ? 0 : Theme.cornerRadius
+                            height: menuEntry?.isSeparator ? Theme.dividerWidth : BarMetrics.menuRowHeight
+                            radius: menuEntry?.isSeparator ? 0 : BarMetrics.menuItemRadius
                             color: {
-                                if (menuEntry?.isSeparator) return Theme.outlineHeavy;
-                                return entryItemArea.containsMouse ? BlurService.hoverColor(Theme.widgetBaseHoverColor) : Theme.withAlpha(Theme.surfaceContainer, 0);
+                                if (menuEntry?.isSeparator)
+                                    return Theme.outlineHeavy;
+                                return Theme.withAlpha(Theme.onSurface, entryItemArea.pressed ? Theme.stateLayerPressed : entryItemArea.containsMouse ? Theme.stateLayerHover : 0);
                             }
 
                             MouseArea {
@@ -1598,7 +1412,8 @@ BasePill {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-                                    if (!menuEntry || menuEntry.isSeparator) return;
+                                    if (!menuEntry || menuEntry.isSeparator)
+                                        return;
                                     if (menuEntry.hasChildren) {
                                         showSubMenu(menuEntry);
                                         return;
@@ -1612,7 +1427,7 @@ BasePill {
                                 }
                             }
 
-                            Row {
+                            RowLayout {
                                 anchors.left: parent.left
                                 anchors.leftMargin: Theme.spacingS
                                 anchors.right: parent.right
@@ -1622,20 +1437,20 @@ BasePill {
                                 visible: !menuEntry?.isSeparator
 
                                 Rectangle {
-                                    width: Theme.iconSizeSmall
-                                    height: Theme.iconSizeSmall
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.preferredWidth: Theme.iconSizeSmall
+                                    Layout.preferredHeight: Theme.iconSizeSmall
+                                    Layout.alignment: Qt.AlignVCenter
                                     visible: menuEntry?.buttonType !== undefined && menuEntry.buttonType !== 0
-                                    radius: menuEntry?.buttonType === 2 ? width / 2 : 2
-                                    border.width: 1
+                                    radius: menuEntry?.buttonType === 2 ? Theme.cornerRadiusFull : Theme.cornerRadiusXXS
+                                    border.width: Theme.outlineWidth
                                     border.color: Theme.outline
                                     color: "transparent"
 
                                     Rectangle {
                                         anchors.centerIn: parent
-                                        width: parent.width - 6
-                                        height: parent.height - 6
-                                        radius: parent.radius - 3
+                                        width: parent.width - Theme.spacingXS - Theme.spacingXXS
+                                        height: parent.height - Theme.spacingXS - Theme.spacingXXS
+                                        radius: menuEntry?.buttonType === 2 ? Theme.cornerRadiusFull : Theme.cornerRadiusXXS
                                         color: Theme.primary
                                         visible: menuEntry?.checkState === 2
                                     }
@@ -1643,16 +1458,16 @@ BasePill {
                                     DankIcon {
                                         anchors.centerIn: parent
                                         name: "check"
-                                        size: Theme.iconSizeSmall - 6
+                                        size: Theme.iconSizeSmall - Theme.spacingXS - Theme.spacingXXS
                                         color: Theme.primaryText
                                         visible: menuEntry?.buttonType === 1 && menuEntry?.checkState === 2
                                     }
                                 }
 
                                 Item {
-                                    width: Theme.iconSizeSmall
-                                    height: Theme.iconSizeSmall
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.preferredWidth: Theme.iconSizeSmall
+                                    Layout.preferredHeight: Theme.iconSizeSmall
+                                    Layout.alignment: Qt.AlignVCenter
                                     visible: (menuEntry?.icon ?? "") !== ""
 
                                     Image {
@@ -1670,22 +1485,23 @@ BasePill {
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: (menuEntry?.enabled !== false) ? Theme.surfaceText : Theme.surfaceTextMedium
                                     elide: Text.ElideRight
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: Math.max(150, parent.width - 64)
+                                    Layout.alignment: Qt.AlignVCenter
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
                                     wrapMode: Text.NoWrap
                                 }
 
                                 Item {
-                                    width: Theme.iconSizeSmall
-                                    height: Theme.iconSizeSmall
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.preferredWidth: Theme.iconSizeSmall
+                                    Layout.preferredHeight: Theme.iconSizeSmall
+                                    Layout.alignment: Qt.AlignVCenter
+                                    visible: menuEntry?.hasChildren ?? false
 
                                     DankIcon {
                                         anchors.centerIn: parent
                                         name: "chevron_right"
                                         size: Theme.iconSizeSmall - 2
                                         color: Theme.widgetTextColor
-                                        visible: menuEntry?.hasChildren ?? false
                                     }
                                 }
                             }
@@ -1707,7 +1523,11 @@ BasePill {
         const tw = triggerWidth || root.width;
         const pos = SettingsData.getPopupTriggerPosition(localPos, screen, root.barThickness, tw, root.barSpacing, barPosition, root.barConfig);
 
-        trayMenuPopout.setTriggerPosition(pos.x, pos.y, pos.width, root.section, screen, barPosition, root.barThickness, root.barSpacing, root.barConfig);
+        const registration = BarWidgetService.registrationForItem(root);
+        if (registration?.context?.owner?.overflowAnchor)
+            registration.context.surface.positionPopout(trayMenuPopout, root, root.section);
+        else
+            trayMenuPopout.setTriggerPosition(pos.x, pos.y, pos.width, root.section, screen, barPosition, root.barThickness, root.barSpacing, root.barConfig);
 
         trayMenuState.trayItem = item;
         trayMenuState.menuHandle = item?.menu ?? null;

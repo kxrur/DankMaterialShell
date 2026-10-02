@@ -40,6 +40,10 @@ func (m *MangoWCProvider) Name() string {
 	return "mangowc"
 }
 
+func (m *MangoWCProvider) ModKey() keybinds.ModKey {
+	return keybinds.DefaultModKey()
+}
+
 func (m *MangoWCProvider) GetCheatSheet() (*keybinds.CheatSheet, error) {
 	result, err := ParseMangoWCKeysWithDMS(m.configPath)
 	if err != nil {
@@ -62,18 +66,10 @@ func (m *MangoWCProvider) GetCheatSheet() (*keybinds.CheatSheet, error) {
 		Binds:            categorizedBinds,
 		DMSBindsIncluded: result.DMSBindsIncluded,
 	}
+	sheet.SetMod(m.ModKey())
 
 	if result.DMSStatus != nil {
-		sheet.DMSStatus = &keybinds.DMSBindsStatus{
-			Exists:          result.DMSStatus.Exists,
-			Included:        result.DMSStatus.Included,
-			IncludePosition: result.DMSStatus.IncludePosition,
-			TotalIncludes:   result.DMSStatus.TotalIncludes,
-			BindsAfterDMS:   result.DMSStatus.BindsAfterDMS,
-			Effective:       result.DMSStatus.Effective,
-			OverriddenBy:    result.DMSStatus.OverriddenBy,
-			StatusMessage:   result.DMSStatus.StatusMessage,
-		}
+		sheet.DMSStatus = keybinds.DMSBindsStatusFrom(*result.DMSStatus)
 	}
 
 	return sheet, nil

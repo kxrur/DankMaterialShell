@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Common
+import qs.Modules.Notifications
 import qs.Services
 
 Item {
@@ -9,7 +10,7 @@ Item {
 
     required property var host
     property var externalKeyboardController: null
-    property real cachedHeaderHeight: 32
+    property real cachedHeaderHeight: Theme.buttonHeightXS
 
     readonly property alias notificationList: notificationList
     readonly property alias notificationHeader: notificationHeader
@@ -23,7 +24,7 @@ Item {
         const requested = root.host.maxContentHeight ?? 0;
         if (requested > 0)
             return requested;
-        return (root.host.screen?.height ?? 1080) * 0.8;
+        return (root.host.screen?.height ?? 1080) * NotificationMetrics.screenHeightRatio;
     }
 
     readonly property real targetImplicitHeight: {
@@ -31,24 +32,24 @@ Item {
         baseHeight += cachedHeaderHeight;
         baseHeight += Theme.spacingM * 2;
 
-        let listHeight = 200;
+        let listHeight = NotificationMetrics.emptyHeight;
         if (notificationHeader.currentTab === 0) {
             if (NotificationService.groupedNotifications.length === 0) {
-                listHeight = 200;
+                listHeight = NotificationMetrics.emptyHeight;
             } else if (root.hostOwnsHeight) {
                 listHeight = notificationList.sessionContentHeight > 0 ? notificationList.sessionContentHeight : notificationList.estimateContentHeight(NotificationService.groupedNotifications.length);
             } else {
                 listHeight = root.host.shouldBeVisible ? notificationList.stableContentHeight : notificationList.listContentHeight;
             }
         } else if (NotificationService.historyList.length > 0) {
-            listHeight = Math.max(200, NotificationService.historyList.length * 80);
+            listHeight = Math.max(NotificationMetrics.emptyHeight, NotificationService.historyList.length * NotificationMetrics.estimatedCardHeight);
         }
 
         if (!root.hostOwnsHeight)
-            listHeight = Math.min(listHeight, 600);
+            listHeight = Math.min(listHeight, NotificationMetrics.centerMaxHeight);
 
         baseHeight += listHeight;
-        return Math.max(300, Math.min(baseHeight, maxContentHeight));
+        return Math.max(NotificationMetrics.centerMinHeight, Math.min(baseHeight, maxContentHeight));
     }
 
     implicitHeight: root.hostOwnsHeight ? height : targetImplicitHeight
@@ -89,7 +90,7 @@ Item {
         id: contentColumn
 
         anchors.fill: parent
-        anchors.margins: Theme.spacingL
+        anchors.margins: PopoutMetrics.contentPadding
         focus: true
 
         Column {
@@ -102,9 +103,8 @@ Item {
                 id: notificationHeader
 
                 objectName: "notificationHeader"
+                historyView: historyList
                 transientSurfaceTracker: root.host.transientSurfaceTracker ?? null
-                tapToClose: root.host.headerTogglesClose ?? false
-                onHeaderTapped: root.host.close()
                 onHeightChanged: root.cachedHeaderHeight = height
                 onSettingsRequested: {
                     if (typeof root.host.requestSettings === "function")
@@ -122,14 +122,12 @@ Item {
 
                     objectName: "notificationList"
                     anchors.fill: parent
-                    anchors.leftMargin: -shadowHorizontalGutter
-                    anchors.rightMargin: -shadowHorizontalGutter
-                    anchors.topMargin: -(shadowVerticalGutter + delegateShadowGutter / 2)
-                    anchors.bottomMargin: -(shadowVerticalGutter + delegateShadowGutter / 2)
+                    anchors.leftMargin: -PopoutMetrics.contentPadding
+                    anchors.rightMargin: -PopoutMetrics.contentPadding
+                    swipeBleed: PopoutMetrics.contentPadding
                     cardAnimateExpansion: root.host.animateCardExpansion ?? true
                     trackStableContentHeight: !root.hostOwnsHeight
                     trackSessionContentHeight: root.hostOwnsHeight
-                    lightweightCards: root.host.lightweightNotifications ?? false
                     transientSurfaceTracker: root.host.transientSurfaceTracker ?? null
                 }
             }
@@ -140,6 +138,7 @@ Item {
                 visible: notificationHeader.currentTab === 1
                 width: parent.width
                 height: parent.height - root.cachedHeaderHeight - contentColumnInner.spacing
+                swipeBleed: PopoutMetrics.contentPadding
             }
         }
     }
@@ -148,8 +147,9 @@ Item {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: Theme.spacingL
+        anchors.margins: PopoutMetrics.contentPadding
         showHints: notificationHeader.currentTab === 0 ? (root.externalKeyboardController?.showKeyboardHints ?? false) : historyList.showKeyboardHints
+        historyTab: notificationHeader.currentTab === 1
         z: 200
     }
 }

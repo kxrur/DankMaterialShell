@@ -1,101 +1,111 @@
 import QtQuick
 import Quickshell.Wayland
 import qs.Common
-import qs.Modules.ControlCenter.Details
 import qs.Services
 import qs.Widgets
-import "./utils/state.js" as StateUtils
 
 DankPopout {
     id: root
 
     layerNamespace: "dms:control-center"
     fullHeightSurface: true
+    resizeCurve: Theme.expressiveCurves.standard
+    resizeDuration: Theme.expressiveDurations.expressiveFastSpatial
+    resizeMotion: true
+    resizing: contentLoader.item?.panelResizing ?? false
+    surfacePadding: PopoutMetrics.editOverflow * 2
+    inputMargin: editMode ? PopoutMetrics.editOverflow * 2 : 0
+    minimumSurfaceWidth: editMode ? CcMetrics.sheetWidthFor(gridColumnCap) : 0
 
     property string expandedSection: ""
+    property string pendingSection: ""
     property var triggerScreen: null
     property bool editMode: false
-    property int expandedWidgetIndex: -1
-    property var expandedWidgetData: null
+    readonly property int gridColumnCap: CcMetrics.columnCapFor(maxBodyWidth > 0 ? maxBodyWidth - PopoutMetrics.editOverflow * 2 : CcMetrics.sheetWidthDefault)
+    readonly property int gridColumns: Math.min(CcMetrics.gridColumns, gridColumnCap)
+    readonly property real sheetContentWidth: CcMetrics.sheetWidthFor(gridColumns)
+    readonly property real availableHeight: _maxPopupHeight()
     property bool powerMenuOpen: powerMenuModalLoader?.item?.shouldBeVisible ?? false
-    property real targetPopupHeight: 400
-    property bool _heightUpdatePending: false
+    property var colorPickerModal: null
+    property var powerMenuModalLoader: null
+
+    property string requestedWindow: ""
+
+    function openSettings() {
+        requestedWindow = "settings";
+        close();
+    }
+
+    function openAccounts() {
+        requestedWindow = "accounts";
+        close();
+    }
+
+    function openColorPicker() {
+        if (!colorPickerModal)
+            return;
+        requestedWindow = "colorPicker";
+        close();
+    }
+
+    function completeWindowClose() {
+        if (!requestedWindow || !isClosing)
+            return;
+        instantClose();
+    }
+
+    onCloseAnimationFinished: finishClose.schedule()
+
+    DeferredAction {
+        id: finishClose
+        onTriggered: root.completeWindowClose()
+    }
+
+    DeferredAction {
+        id: openWindow
+        onTriggered: {
+            const requested = root.requestedWindow;
+            root.requestedWindow = "";
+            switch (requested) {
+            case "settings":
+                PopoutService.focusOrToggleSettings();
+                break;
+            case "accounts":
+                PopoutService.openSettingsWithTab("user_accounts");
+                break;
+            case "colorPicker":
+                root.colorPickerModal?.show();
+                break;
+            }
+        }
+    }
+
+    onPopoutClosed: {
+        editMode = false;
+        collapseAll();
+        if (requestedWindow)
+            openWindow.schedule();
+    }
 
     signal lockRequested
 
     function _maxPopupHeight() {
-        const screenHeight = (triggerScreen?.height ?? 1080);
-        return screenHeight - 100;
-    }
-
-    function _contentTargetHeight() {
-        const item = contentLoader.item;
-        if (!item)
-            return 400;
-        // The content now reports its own insets, so no popout-side padding.
-        const naturalHeight = item.targetImplicitHeight !== undefined ? item.targetImplicitHeight : item.implicitHeight;
-        return Math.max(300, naturalHeight);
-    }
-
-    function updateTargetPopupHeight() {
-        const target = Math.min(_maxPopupHeight(), _contentTargetHeight());
-        if (Math.abs(targetPopupHeight - target) < 0.5)
-            return;
-        targetPopupHeight = target;
-    }
-
-    function queueTargetPopupHeightUpdate() {
-        if (_heightUpdatePending)
-            return;
-        _heightUpdatePending = true;
-        Qt.callLater(() => {
-            _heightUpdatePending = false;
-            updateTargetPopupHeight();
-        });
+        if (maxBodyHeight <= 0)
+            return CcMetrics.fallbackScreenHeight - CcMetrics.maxHeightInset;
+        return maxBodyHeight - PopoutMetrics.editOverflow * 2;
     }
 
     function collapseAll() {
         expandedSection = "";
-        expandedWidgetIndex = -1;
-        expandedWidgetData = null;
-        queueTargetPopupHeightUpdate();
     }
 
-    onEditModeChanged: {
-        if (editMode) {
-            collapseAll();
-        }
-        queueTargetPopupHeightUpdate();
-    }
-
-    onVisibleChanged: {
-        if (!visible) {
-            collapseAll();
-        }
-    }
-
-    readonly property color _containerBg: Theme.nestedSurface
-
-    // Defer open one tick so screen-change geometry settles before the surface
-    // maps; a synchronous open churns the surface and loses the blur on a switch.
-    function present() {
-        Qt.callLater(open);
-    }
-
-    function openWithSection(section) {
-        StateUtils.openWithSection(root, section);
-    }
-
-    function toggleSection(section) {
-        StateUtils.toggleSection(root, section);
-    }
-
-    popupWidth: 550
-    popupHeight: targetPopupHeight
-    triggerWidth: 80
+    popupWidth: sheetContentWidth
+    popupHeight: Math.min(_maxPopupHeight(), Math.max(CcMetrics.minHeight, contentLoader.item?.targetImplicitHeight ?? CcMetrics.minHeight))
+    triggerWidth: CcMetrics.triggerWidth
     positioning: ""
     screen: triggerScreen
     shouldBeVisible: false
+    contentHandlesKeys: true
 
     property bool credentialsPromptOpen: NetworkService.credentialsRequested
     property bool wifiPasswordModalOpen: PopoutService.wifiPasswordModal?.shouldBeVisible ?? false
@@ -103,7 +113,7 @@ DankPopout {
     property bool anyModalOpen: credentialsPromptOpen || wifiPasswordModalOpen || polkitModalOpen || powerMenuOpen
 
     backgroundInteractive: !anyModalOpen
-    hoverDismissSuspended: editMode || anyModalOpen
+    hoverDismissSuspended: editMode || expandedSection !== "" || anyModalOpen
 
     onCredentialsPromptOpenChanged: {
         if (credentialsPromptOpen && shouldBeVisible)
@@ -121,44 +131,18 @@ DankPopout {
 
     onShouldBeVisibleChanged: {
         if (shouldBeVisible) {
-            collapseAll();
-            queueTargetPopupHeightUpdate();
-            Qt.callLater(() => {
-                if (NetworkService.activeService)
-                    NetworkService.activeService.autoRefreshEnabled = NetworkService.wifiEnabled;
-            });
-        } else {
-            Qt.callLater(() => {
-                if (NetworkService.activeService) {
-                    NetworkService.activeService.autoRefreshEnabled = false;
-                }
-                if (BluetoothService.adapter && BluetoothService.adapter.discovering)
-                    BluetoothService.adapter.discovering = false;
-                editMode = false;
-            });
+            finishClose.cancel();
+            openWindow.cancel();
+            requestedWindow = "";
+            expandedSection = pendingSection;
+            pendingSection = "";
+            Qt.callLater(() => contentLoader.item?.forceActiveFocus());
+            return;
         }
-    }
-
-    onExpandedSectionChanged: queueTargetPopupHeightUpdate()
-    onExpandedWidgetIndexChanged: queueTargetPopupHeightUpdate()
-    onTriggerScreenChanged: queueTargetPopupHeightUpdate()
-
-    Connections {
-        target: contentLoader
-        function onLoaded() {
-            root.queueTargetPopupHeightUpdate();
-        }
-    }
-
-    Connections {
-        target: contentLoader.item
-        ignoreUnknownSignals: true
-        function onTargetImplicitHeightChanged() {
-            root.queueTargetPopupHeightUpdate();
-        }
-        function onImplicitHeightChanged() {
-            root.queueTargetPopupHeightUpdate();
-        }
+        Qt.callLater(() => {
+            if (BluetoothService.adapter && BluetoothService.adapter.discovering)
+                BluetoothService.adapter.discovering = false;
+        });
     }
 
     content: Component {
@@ -166,39 +150,4 @@ DankPopout {
             host: root
         }
     }
-
-    Component {
-        id: networkDetailComponent
-        NetworkDetail {}
-    }
-
-    Component {
-        id: bluetoothDetailComponent
-        BluetoothDetail {
-            id: bluetoothDetail
-            bluetoothCodecModalRef: contentLoader.item ? contentLoader.item.bluetoothCodecSelector : null
-            onShowCodecSelector: function (device) {
-                if (contentLoader.item && contentLoader.item.bluetoothCodecSelector) {
-                    contentLoader.item.bluetoothCodecSelector.show(device);
-                    contentLoader.item.bluetoothCodecSelector.codecSelected.connect(function (deviceAddress, codecName) {
-                        bluetoothDetail.updateDeviceCodecDisplay(deviceAddress, codecName);
-                    });
-                }
-            }
-        }
-    }
-
-
-    Component {
-        id: audioInputDetailComponent
-        AudioInputDetail {}
-    }
-
-    Component {
-        id: batteryDetailComponent
-        BatteryDetail {}
-    }
-
-    property var colorPickerModal: null
-    property var powerMenuModalLoader: null
 }

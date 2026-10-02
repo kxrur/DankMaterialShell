@@ -2,6 +2,11 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Common
+import qs.Modals.Clipboard
+import qs.Modals.DankLauncherV2.Components
+import qs.Modules.ControlCenter
+import qs.Modules.DankBar
+import qs.Modules.DankDash
 
 QtObject {
     id: root
@@ -24,6 +29,14 @@ QtObject {
         if (launcherInputFocused)
             hoverExpanded = false;
     }
+    property var transientSurfaces: null
+    readonly property bool transientSurfacesActive: transientSurfaces?.active ?? false
+    onTransientSurfacesActiveChanged: {
+        if (!transientSurfacesActive)
+            return;
+        hoverExpanded = false;
+        hoverCloseTimer.stop();
+    }
     property string launcherPendingQuery: ""
     property string launcherPendingMode: ""
     property string controlCenterPendingSection: ""
@@ -34,8 +47,15 @@ QtObject {
     property var barConfig: null
     property string edge: "top"
     readonly property bool isVertical: edge === "left" || edge === "right"
+    readonly property bool farEdge: edge === "bottom" || edge === "right"
     property real cornerRadius: 34
+    property real pillRadius: cornerRadius
     readonly property real edgeCornerRadius: Math.round(cornerRadius * 0.75)
+    property bool freeMode: false
+    property bool dotMode: false
+    // Hosted in a bar: the sheet is flush with the band, so its near corners stay square.
+    property bool embedded: false
+    property real dotSize: 48
     property real compactThickness: 38
     property string batteryStyle: "solid"
     property bool mediaClockVisible: true
@@ -49,23 +69,38 @@ QtObject {
     property int hoverCloseDelay: 150
     property int mediaReturnDelay: 1800
     property real controlCenterMaxHeight: 640
-    property real notificationCenterMaxHeight: 640
+    property string editingActivity: ""
+    property real editRoom: 0
+    // The bar host grants the room once its surface has presented a frame at the grown size.
+    property bool editRoomGranted: false
+    readonly property real controlCenterSheetInset: 30
+    readonly property int controlCenterColumnCap: CcMetrics.columnCapFor(dashboardAvailableWidth - controlCenterSheetInset - PopoutMetrics.editOverflow * 2)
+    readonly property int controlCenterColumns: Math.min(CcMetrics.gridColumns, controlCenterColumnCap)
+    readonly property real controlCenterSheetWidth: CcMetrics.sheetWidthFor(controlCenterColumns)
+    readonly property real controlCenterMaxWidth: CcMetrics.sheetWidthFor(editingActivity === "controlcenter" ? controlCenterColumnCap : controlCenterColumns) + controlCenterSheetInset
     readonly property real controlCenterHeight: Math.max(320, Math.min(controlCenterMaxHeight, destinationContentHeight("controlcenter")))
-    readonly property real notificationCenterHeight: Math.max(320, Math.min(notificationCenterMaxHeight, destinationContentHeight("notificationcenter")))
 
     readonly property bool compactDense: compactThickness < 40
-    readonly property real compactFaceThickness: compactThickness + (compactDense ? 2 : 4)
+    readonly property real compactFaceThickness: BarMetrics.compactFaceThickness(compactThickness)
     readonly property real compactIconSize: Math.max(14, Math.min(32, compactThickness - 8))
     property bool homeCompactTight: false
     readonly property real homeCompactFaceThickness: homeCompactTight ? Math.max(16, Math.min(32, compactThickness - 8)) : compactFaceThickness
 
     property int unreadNotificationCount: 0
-    readonly property bool homeNotificationBadge: SettingsData.islandHomeGroupEnabled(root.barConfig, "notifications") && unreadNotificationCount > 0
+    readonly property bool homeNotificationBadge: (root.dotMode || SettingsData.islandHomeGroupEnabled(root.barConfig, "notifications")) && unreadNotificationCount > 0
     readonly property bool homeWeatherEnabled: SettingsData.weatherEnabled && SettingsData.islandHomeGroupEnabled(root.barConfig, "weather")
     readonly property real homeSlotMargin: homeCompactTight ? Theme.spacingS : Theme.spacingM
     property real homeContentLength: 200
     property real mediaContentLength: 360
-    property real mediaExpandedHeight: 324
+    property real dashboardAvailableWidth: 1920
+    property real dashboardAvailableHeight: 1080
+    readonly property int dashboardColumnCap: DashMetrics.columnCapFor(dashboardAvailableWidth - PopoutMetrics.editOverflow * 2, SettingsData.showWeekNumber)
+    readonly property real dashboardMaxWidth: Math.min(dashboardAvailableWidth, DashMetrics.widthFor(SettingsData.showWeekNumber, undefined, editingActivity !== "" ? dashboardColumnCap : DashRegistry.widestPanelColumns))
+    property var dashboardContentHeights: ({})
+    readonly property real dashChromeHeight: DashMetrics.islandHandleChromeHeight
+    readonly property real editSurfaceHeight: editRoom > 0 ? dashboardHeightFor(editingActivity, true) : 0
+    readonly property real dashboardHeight: Math.min(dashboardAvailableHeight, Math.max(DashMetrics.tabDefaultHeight + root.dashChromeHeight, ...Object.values(dashboardContentHeights)))
+    readonly property int dashboardRowBudget: Math.max(DashMetrics.minimumTabRows, Math.floor((dashboardAvailableHeight - DashMetrics.islandEditChromeHeight + DashMetrics.gridGap) / (DashMetrics.gridRowUnit + DashMetrics.gridGap)))
     readonly property real mediaCompactMaxLength: 360
     property real notificationContentLength: 0
     readonly property real notificationCompactMinLength: isVertical ? compactFaceThickness : (compactDense ? 200 : 240)
@@ -87,11 +122,37 @@ QtObject {
         notificationContentLength = next;
     }
 
-    function setMediaExpandedHeight(height) {
+    function setDashboardContentHeight(activityId, height) {
         const next = Math.ceil(height);
-        if (!isFinite(next) || next <= 0 || Math.abs(next - mediaExpandedHeight) < 1)
+        if (!isFinite(next) || next <= 0 || dashboardContentHeights[activityId] === next)
             return;
-        mediaExpandedHeight = next;
+        dashboardContentHeights = Object.assign({}, dashboardContentHeights, {
+            [activityId]: next
+        });
+    }
+
+    function dashEntryIdFor(activityId) {
+        switch (activityId) {
+        case "home":
+            return DashRegistry.overviewId;
+        case "notificationcenter":
+            return "notifications";
+        }
+        return activityId;
+    }
+
+    function dashboardWidthFor(activityId) {
+        return Math.min(dashboardAvailableWidth, DashMetrics.widthFor(SettingsData.showWeekNumber, undefined, DashMetrics.panelColumnsFor(dashEntryIdFor(activityId))));
+    }
+
+    function dashboardHeightFor(activityId, withEditRoom) {
+        const minimum = DashMetrics.panelHeightFor(dashEntryIdFor(activityId));
+        const height = Math.max(minimum + root.dashChromeHeight, dashboardContentHeights[activityId] ?? 0);
+        return Math.min(dashboardAvailableHeight, height + (withEditRoom ? root.editRoom : 0));
+    }
+
+    function dashboardTargetFor(activityId) {
+        return sheetTarget(dashboardWidthFor(activityId), dashboardHeightFor(activityId, root.editRoomGranted && root.editingActivity === activityId));
     }
 
     function setMediaContentLength(length) {
@@ -101,8 +162,8 @@ QtObject {
         mediaContentLength = next;
     }
 
-    readonly property var destinations: ["launcher", "controlcenter", "wallpaper", "weather", "notificationcenter"]
-    readonly property var blankClickOwners: ["launcher", "controlcenter", "wallpaper", "notificationcenter"]
+    readonly property var destinations: ["launcher", "controlcenter", "wallpaper", "weather", "notificationcenter", "clipboard"]
+    readonly property var blankClickOwners: ["launcher", "controlcenter", "wallpaper", "notificationcenter", "clipboard"]
     readonly property var destinationDefaults: ({
             "launcher": {
                 "contentLength": 160,
@@ -123,10 +184,15 @@ QtObject {
             "notificationcenter": {
                 "contentLength": 170,
                 "contentHeight": 320
+            },
+            "clipboard": {
+                "contentLength": 150,
+                "contentHeight": 0
             }
         })
     property var destinationState: root.freshDestinationState()
     property int destinationRevision: 0
+    property int requestedRevision: 0
 
     function freshDestinationState() {
         const state = {};
@@ -153,7 +219,8 @@ QtObject {
     }
 
     function visualsRequested(activityId) {
-        return destinationEntry(activityId)?.requested ?? false;
+        requestedRevision;
+        return destinationState[activityId]?.requested ?? false;
     }
 
     function visualsReady(activityId) {
@@ -175,6 +242,21 @@ QtObject {
             return;
         entry.contentLength = next;
         destinationRevision++;
+    }
+
+    function setEditing(activityId, editing, room = 0) {
+        if (editing) {
+            editRoomGranted = false;
+            editingActivity = activityId;
+            editRoom = room;
+            // Option sheets open child popups; a hover peek would collapse under them
+            hoverExpanded = false;
+            hoverCloseTimer.stop();
+        } else if (editingActivity === activityId) {
+            editRoomGranted = false;
+            editRoom = 0;
+            editingActivity = "";
+        }
     }
 
     function setDestinationContentHeight(activityId, height) {
@@ -250,6 +332,7 @@ QtObject {
         entry.pending = false;
         entry.contentHeight = destinationDefaults[activityId].contentHeight;
         destinationRevision++;
+        requestedRevision++;
         switch (activityId) {
         case "launcher":
             launcherSessionActive = false;
@@ -261,6 +344,7 @@ QtObject {
             controlCenterPendingSection = "";
             return;
         case "wallpaper":
+        case "clipboard":
             keyboardYielded = false;
             return;
         }
@@ -291,7 +375,9 @@ QtObject {
 
     // Corners touching the attached screen edge stay tighter than the ones facing the desktop.
     function sheetRadii() {
-        const near = root.edgeCornerRadius;
+        if (root.freeMode)
+            return [root.cornerRadius, root.cornerRadius, root.cornerRadius, root.cornerRadius];
+        const near = root.embedded ? 0 : root.edgeCornerRadius;
         const far = root.cornerRadius;
         switch (root.edge) {
         case "bottom":
@@ -305,7 +391,7 @@ QtObject {
     }
 
     function pillTarget(alongSize, crossSize) {
-        const radius = Math.min(crossSize / 2, root.cornerRadius);
+        const radius = Math.min(crossSize / 2, root.pillRadius);
         return {
             "width": root.isVertical ? crossSize : alongSize,
             "height": root.isVertical ? alongSize : crossSize,
@@ -321,6 +407,7 @@ QtObject {
     function sheetTarget(width, height) {
         const radii = root.sheetRadii();
         return {
+            "sheet": true,
             "width": width,
             "height": height,
             "offsetAlong": root.alongOffset,
@@ -332,17 +419,33 @@ QtObject {
         };
     }
 
+    readonly property var dotCompactTarget: ({
+            "width": root.dotSize,
+            "height": root.dotSize,
+            "offsetAlong": root.alongOffset,
+            "offsetCross": root.outerGap,
+            "topLeftRadius": root.dotSize / 2,
+            "topRightRadius": root.dotSize / 2,
+            "bottomLeftRadius": root.dotSize / 2,
+            "bottomRightRadius": root.dotSize / 2
+        })
+    readonly property var dotTransientActivities: ["notification", "volume", "brightness"]
+    // Transients keep their island pill so the dot can still show a notification or a level.
+    function usesDotFace(activityId) {
+        return root.dotMode && root.dotTransientActivities.indexOf(activityId) === -1;
+    }
     readonly property var homeCompactTarget: pillTarget(homeCompactLength, homeCompactFaceThickness)
     readonly property var mediaCompactTarget: pillTarget(mediaCompactLength, compactFaceThickness)
-    readonly property var dashSheetTarget: sheetTarget(SettingsData.showWeekNumber ? 736 : 700, 452)
-    readonly property var mediaExpandedTarget: sheetTarget(600, mediaExpandedHeight)
-    readonly property var launcherExpandedTarget: sheetTarget(680, 560)
-    readonly property var controlCenterExpandedTarget: sheetTarget(580, controlCenterHeight)
+    readonly property var homeExpandedTarget: dashboardTargetFor("home")
+    readonly property var mediaExpandedTarget: dashboardTargetFor("media")
+    readonly property var launcherExpandedTarget: sheetTarget(Math.min(dashboardAvailableWidth, LauncherMetrics.sizeWidth(SettingsData.dankLauncherV2Size)), Math.min(dashboardAvailableHeight, LauncherMetrics.sizeHeight(SettingsData.dankLauncherV2Size)))
+    readonly property var controlCenterExpandedTarget: sheetTarget(controlCenterSheetWidth + controlCenterSheetInset, controlCenterHeight)
     readonly property var systemCompactTarget: pillTarget(root.isVertical ? 240 : (SettingsData.osdAlwaysShowValue ? 330 : 282), compactFaceThickness)
     readonly property var systemExpandedTarget: sheetTarget(460, 176)
     readonly property var notificationCompactTarget: pillTarget(Math.ceil(Math.max(notificationCompactMinLength, Math.min(notificationCompactMaxLength, notificationContentLength))), compactFaceThickness)
     readonly property var notificationExpandedTarget: sheetTarget(520, 220)
-    readonly property var notificationCenterExpandedTarget: sheetTarget(480, notificationCenterHeight)
+    readonly property var notificationCenterExpandedTarget: dashboardTargetFor("notificationcenter")
+    readonly property var clipboardExpandedTarget: sheetTarget(Math.min(dashboardAvailableWidth, ClipboardConstants.sizeWidth(SettingsData.clipboardSize)), Math.min(dashboardAvailableHeight, ClipboardConstants.sizeHeight(SettingsData.clipboardSize)))
 
     readonly property bool systemActivityActive: activeActivity === "volume" || activeActivity === "brightness"
     readonly property bool notificationActive: activeActivity === "notification"
@@ -352,6 +455,8 @@ QtObject {
     readonly property bool activityOwnsBlankClicks: blankClickOwners.indexOf(activeActivity) !== -1
     readonly property bool hoverExpandEnabled: root.interactionMode === "hybrid" && !root.systemActivityActive
     function compactTargetFor(activityId) {
+        if (root.usesDotFace(activityId))
+            return dotCompactTarget;
         switch (activityId) {
         case "notification":
             return notificationCompactTarget;
@@ -369,6 +474,8 @@ QtObject {
     readonly property var compactTarget: compactTargetFor(activeActivity)
     function expandedTargetFor(activityId) {
         switch (activityId) {
+        case "home":
+            return homeExpandedTarget;
         case "notification":
             return notificationExpandedTarget;
         case "volume":
@@ -380,10 +487,12 @@ QtObject {
             return controlCenterExpandedTarget;
         case "notificationcenter":
             return notificationCenterExpandedTarget;
+        case "clipboard":
+            return clipboardExpandedTarget;
         case "media":
             return mediaExpandedTarget;
         }
-        return dashSheetTarget;
+        return dashboardTargetFor(activityId);
     }
 
     readonly property var expandedTarget: expandedTargetFor(activeActivity)
@@ -553,6 +662,7 @@ QtObject {
             entry.pendingKeyboardFocus = requestKeyboardFocus === true;
             entry.requested = true;
             destinationRevision++;
+            requestedRevision++;
             return true;
         }
 
@@ -607,6 +717,12 @@ QtObject {
         return requestActivity("notificationcenter", true, true);
     }
 
+    function requestClipboard(shouldToggle) {
+        if (shouldToggle === true && activeActivity === "clipboard" && expanded)
+            return requestCollapse();
+        return requestActivity("clipboard", true, true);
+    }
+
     function cycleActivity(direction, shouldExpand) {
         const activities = ["home"];
         if (mediaAvailable)
@@ -614,6 +730,9 @@ QtObject {
         if (launcherCycleEnabled)
             activities.push("launcher");
         activities.push("controlcenter");
+        activities.push("wallpaper");
+        if (SettingsData.weatherEnabled)
+            activities.push("weather");
         activities.push("notificationcenter");
         const currentIndex = Math.max(0, activities.indexOf(activeActivity));
         const step = direction < 0 ? -1 : 1;

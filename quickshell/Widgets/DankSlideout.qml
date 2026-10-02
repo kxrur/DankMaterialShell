@@ -29,6 +29,7 @@ PanelWindow {
     readonly property bool slideFromLeft: slideEdge === "left"
     readonly property real surfaceOriginX: slideFromLeft ? 0 : Math.max(0, (modelData?.width ?? width) - width)
     property Component content: null
+    property bool contentRequested: false
     property string title: ""
     property alias container: contentContainer
     property alias loadedItem: contentLoader.item
@@ -38,6 +39,7 @@ PanelWindow {
     signal revealed
 
     function show() {
+        contentRequested = true;
         mappedVisible = true;
         Qt.callLater(() => {
             isVisible = true;
@@ -118,12 +120,19 @@ PanelWindow {
     readonly property real alignedEdgeGap: Theme.px(edgeGap, dpr)
     readonly property real slideoutSlideSnapX: Theme.snap(slideContainer.slideOffset, dpr)
 
+    onIsVisibleChanged: {
+        slideSpring.retarget(isVisible ? 0 : (slideFromLeft ? -slideContainer.width : slideContainer.width));
+        if (isVisible || slideSpring.running)
+            return;
+        mappedVisible = false;
+    }
+
     mask: Region {
         item: Rectangle {
             x: root.slideFromLeft ? root.alignedEdgeGap : (root.width - slideContainer.width - root.alignedEdgeGap)
             y: root.alignedEdgeGap
-            width: slideContainer.width
-            height: root.height - root.alignedEdgeGap * 2
+            width: root.isVisible ? slideContainer.width : 0
+            height: root.isVisible ? root.height - root.alignedEdgeGap * 2 : 0
         }
     }
 
@@ -139,7 +148,7 @@ PanelWindow {
         anchors.leftMargin: root.alignedEdgeGap
 
         property bool slideSlowExit: false
-        readonly property var slideSpringParams: Theme.springPreset("default", slideSlowExit ? Math.round(Theme.expressiveDurations.expressiveDefaultSpatial) : 450)
+        readonly property var slideSpringParams: Theme.springPreset("default", slideSlowExit ? Math.round(Theme.expressiveDurations.expressiveDefaultSpatial) : Theme.expressiveDurations.expressiveDefaultSpatial)
         readonly property var widthSpringParams: Theme.springPreset("default", Theme.popoutAnimationDuration)
 
         SpringMotion {
@@ -180,27 +189,16 @@ PanelWindow {
         width: widthSpring.value
         height: root.alignedHeight - root.alignedEdgeGap * 2
 
-        Connections {
-            target: root
-            function onIsVisibleChanged() {
-                const target = root.isVisible ? 0 : (root.slideFromLeft ? -slideContainer.width : slideContainer.width);
-                slideSpring.retarget(target);
-            }
-        }
-
         Item {
             id: contentRect
-            layer.enabled: Quickshell.env("DMS_DISABLE_LAYER") !== "true" && Quickshell.env("DMS_DISABLE_LAYER") !== "1"
-            layer.smooth: false
-            layer.textureSize: Qt.size(0, 0)
-            opacity: 1
+            clip: true
 
             readonly property color slideoutSurfaceColor: {
                 if (root.customTransparency >= 0)
-                    return Theme.withAlpha(Theme.surfaceContainer, root.customTransparency);
+                    return Theme.withAlpha(Theme.hostSurface, root.customTransparency);
                 if (Theme.isConnectedEffect)
                     return Theme.connectedSurfaceColor;
-                return Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency);
+                return Theme.readableSurface;
             }
 
             anchors.top: parent.top
@@ -208,85 +206,106 @@ PanelWindow {
             width: parent.width
             x: root.slideoutSlideSnapX
 
+            ElevationShadow {
+                anchors.fill: parent
+                visible: !Theme.isConnectedEffect
+                level: Theme.elevationLevel2
+                targetRadius: Theme.windowRadius
+                targetColor: contentRect.slideoutSurfaceColor
+                shadowEnabled: Theme.elevationEnabled && SettingsData.popoutElevationEnabled
+            }
+
             Rectangle {
                 anchors.fill: parent
-                color: contentRect.slideoutSurfaceColor
-                radius: Theme.connectedSurfaceRadius
+                color: Theme.isConnectedEffect ? contentRect.slideoutSurfaceColor : "transparent"
+                radius: Theme.isConnectedEffect ? Theme.connectedSurfaceRadius : Theme.windowRadius
                 border.color: Theme.isConnectedEffect ? Theme.withAlpha(BlurService.borderColor, 0) : BlurService.borderColor
                 border.width: Theme.isConnectedEffect ? 0 : BlurService.borderWidth
             }
 
-            Column {
-                id: headerColumn
+            Item {
+                id: contentBody
                 anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.margins: Theme.spacingL
-                spacing: Theme.spacingM
-                visible: root.title !== ""
+                anchors.bottom: parent.bottom
+                anchors.right: root.slideFromLeft ? undefined : parent.right
+                anchors.left: root.slideFromLeft ? parent.left : undefined
+                width: root.alignedWidth
 
-                Row {
-                    width: parent.width
-                    height: 32
-
-                    Column {
-                        width: parent.width - buttonRow.width
-                        spacing: Theme.spacingXS
-                        anchors.verticalCenter: parent.verticalCenter
-
-                        StyledText {
-                            text: root.title
-                            font.pixelSize: Theme.fontSizeLarge
-                            color: Theme.surfaceText
-                            font.weight: Font.Medium
-                        }
-                    }
+                Column {
+                    id: headerColumn
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.margins: Theme.spacingL
+                    spacing: Theme.spacingM
+                    visible: root.title !== ""
 
                     Row {
-                        id: buttonRow
-                        spacing: Theme.spacingXS
+                        width: parent.width
+                        height: 32
 
-                        DankActionButton {
-                            id: expandButton
-                            iconName: root.expandedWidth ? "unfold_less" : "unfold_more"
-                            iconSize: Theme.iconSize - 4
-                            iconColor: Theme.surfaceText
-                            visible: root.expandable
-                            onClicked: root.expandedWidth = !root.expandedWidth
+                        Column {
+                            width: parent.width - buttonRow.width
+                            spacing: Theme.spacingXS
+                            anchors.verticalCenter: parent.verticalCenter
 
-                            transform: Rotation {
-                                angle: 90
-                                origin.x: expandButton.width / 2
-                                origin.y: expandButton.height / 2
+                            StyledText {
+                                text: root.title
+                                font.pixelSize: Theme.fontSizeLarge
+                                color: Theme.surfaceText
+                                font.weight: Theme.fontWeightMedium
                             }
                         }
 
-                        DankActionButton {
-                            id: closeButton
-                            iconName: "close"
-                            iconSize: Theme.iconSize - 4
-                            iconColor: Theme.surfaceText
-                            onClicked: root.hide()
+                        Row {
+                            id: buttonRow
+                            spacing: Theme.spacingXS
+
+                            DankActionButton {
+                                id: expandButton
+                                iconName: root.expandedWidth ? "unfold_less" : "unfold_more"
+                                tooltipText: root.expandedWidth ? I18n.tr("Collapse") : I18n.tr("Expand")
+                                iconSize: Theme.iconSize - 4
+                                iconColor: Theme.surfaceText
+                                visible: root.expandable
+                                onClicked: root.expandedWidth = !root.expandedWidth
+
+                                transform: Rotation {
+                                    angle: 90
+                                    origin.x: expandButton.width / 2
+                                    origin.y: expandButton.height / 2
+                                }
+                            }
+
+                            DankActionButton {
+                                id: closeButton
+                                iconName: "close"
+                                Accessible.name: I18n.tr("Close")
+                                iconSize: Theme.iconSize - 4
+                                iconColor: Theme.surfaceText
+                                onClicked: root.hide()
+                            }
                         }
                     }
                 }
-            }
 
-            Item {
-                id: contentContainer
-                anchors.top: root.title !== "" ? headerColumn.bottom : parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.topMargin: root.title !== "" ? 0 : Theme.spacingL
-                anchors.leftMargin: Theme.spacingL
-                anchors.rightMargin: Theme.spacingL
-                anchors.bottomMargin: Theme.spacingL
+                Item {
+                    id: contentContainer
+                    anchors.top: root.title !== "" ? headerColumn.bottom : parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.topMargin: root.title !== "" ? 0 : Theme.spacingL
+                    anchors.leftMargin: Theme.spacingL
+                    anchors.rightMargin: Theme.spacingL
+                    anchors.bottomMargin: Theme.spacingL
 
-                Loader {
-                    id: contentLoader
-                    anchors.fill: parent
-                    sourceComponent: root.content
+                    Loader {
+                        id: contentLoader
+                        anchors.fill: parent
+                        active: root.contentRequested
+                        sourceComponent: root.content
+                    }
                 }
             }
         }
@@ -294,10 +313,11 @@ PanelWindow {
 
     WindowBlur {
         targetWindow: root
+        surfaceColor: contentRect.slideoutSurfaceColor
         blurX: root.slideoutBlurActive ? slideContainer.x + root.slideoutSlideSnapX : 0
         blurY: root.slideoutBlurActive ? slideContainer.y : 0
         blurWidth: root.slideoutBlurActive ? slideContainer.width : 0
         blurHeight: root.slideoutBlurActive ? slideContainer.height : 0
-        blurRadius: Theme.connectedSurfaceRadius
+        blurRadius: Theme.isConnectedEffect ? Theme.connectedSurfaceRadius : Theme.windowRadius
     }
 }

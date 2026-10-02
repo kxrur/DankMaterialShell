@@ -6,7 +6,9 @@ import QtQuick
 import Quickshell
 import Quickshell.Hyprland
 import qs.Common
+import "../Common/ConfigIncludeResolve.js" as ConfigIncludeResolve
 import qs.Services
+import "../Common/OutputModel.js" as OutputModel
 
 Singleton {
     id: root
@@ -21,6 +23,8 @@ Singleton {
     readonly property bool luaConfigActive: CompositorService.isHyprland && (Hyprland.usingLua === true || luaConfigDetected)
 
     property int _lastGapValue: -1
+    property string _monitorLayoutSignature: ""
+    signal monitorLayoutChanged
     property bool luaConfigDetected: false
     property bool luaConfigStatusReady: false
     property bool luaConfigStatusLoading: false
@@ -53,8 +57,30 @@ Singleton {
             ensureDmsLuaConfigs();
     }
 
+    // workspaceString + monitor pairs from `hyprctl workspacerules`, refreshed on configreloaded
+    property var workspaceRules: []
+
+    function refreshWorkspaceRules() {
+        if (!CompositorService.isHyprland)
+            return;
+        Proc.runCommand("hyprctl-workspacerules", ["hyprctl", "-j", "workspacerules"], (output, exitCode) => {
+            if (exitCode !== 0)
+                return;
+            try {
+                const rules = JSON.parse(output);
+                workspaceRules = Array.isArray(rules) ? rules.filter(rule => rule.monitor).map(rule => ({
+                    "workspaceString": rule.workspaceString,
+                    "monitor": rule.monitor
+                })) : [];
+            } catch (error) {
+                log.warn("workspacerules parse failed:", error);
+            }
+        });
+    }
+
     Component.onCompleted: {
         if (CompositorService.isHyprland) {
+            refreshWorkspaceRules();
             refreshLuaConfigStatus();
             if (luaConfigActive)
                 ensureDmsLuaConfigs();
@@ -107,9 +133,7 @@ Singleton {
     function getOutputIdentifier(output, outputName) {
         if (output.explicitIdentifier)
             return outputName;
-        if (SettingsData.displayNameMode === "model" && output.make && output.model)
-            return ("desc:" + [output.make, output.model, output.serial].filter(p => p).join(" ")).replace(/,/g, "");
-        return outputName;
+        return OutputModel.hyprlandIdentifier(output, outputName, SettingsData.displayNameMode);
     }
 
     function luaQuoted(str) {
@@ -128,7 +152,7 @@ Singleton {
             return;
 
         luaConfigStatusLoading = true;
-        Proc.runCommand("hypr-lua-config-status", [Proc.dmsBin, "config", "resolve-include", "hyprland", "outputs.lua"], (output, exitCode) => {
+        Proc.runCommand("hypr-lua-config-status", [Proc.dmsBin, "config", "resolve-include", ...ConfigIncludeResolve.resolveIncludeArgs("outputs", "hyprland")], (output, exitCode) => {
             luaConfigStatusLoading = false;
             luaConfigStatusReady = true;
             if (exitCode !== 0) {
@@ -220,7 +244,7 @@ Singleton {
 
             const parts = [`output = ${luaQuoted(identifier)}`, `mode = ${luaQuoted(resolution)}`, `position = ${luaQuoted(position)}`, `scale = ${Number(scale)}`];
 
-            const transform = transformToHyprland(output.logical?.transform ?? "Normal");
+            const transform = OutputModel.transformIndex(output.logical?.transform ?? "Normal");
             if (transform !== 0)
                 parts.push(`transform = ${transform}`);
 
@@ -296,9 +320,34 @@ Singleton {
         Proc.runCommand("hyprctl-reload", ["hyprctl", "reload"], (output, exitCode) => {
             if (exitCode !== 0)
                 log.warn("hyprctl reload failed:", output);
+            else
+                Hyprland.refreshMonitors();
             if (callback)
                 callback(exitCode === 0);
         });
+    }
+
+    function liveMonitor(name) {
+        if (!CompositorService.isHyprland)
+            return null;
+        return Hyprland.monitors.values.find(m => m.name === name) ?? null;
+    }
+
+    function _syncMonitorLayout() {
+        const signature = Hyprland.monitors.values.map(m => `${m.name}:${m.x},${m.y},${m.scale},${m.lastIpcObject?.transform ?? 0}`).join("|");
+        if (signature === _monitorLayoutSignature)
+            return;
+        _monitorLayoutSignature = signature;
+        monitorLayoutChanged();
+    }
+
+    Instantiator {
+        model: CompositorService.isHyprland ? Hyprland.monitors : null
+        delegate: QtObject {
+            required property HyprlandMonitor modelData
+            readonly property var monitorLastIpcObject: modelData.lastIpcObject
+            onMonitorLastIpcObjectChanged: root._syncMonitorLayout()
+        }
     }
 
     function setLayoutXray(enabled) {
@@ -360,11 +409,10 @@ Singleton {
         }
         layoutGenerationRunning = true;
 
-        const defaultRadius = typeof SettingsData !== "undefined" ? SettingsData.cornerRadius : 12;
         const defaultGaps = typeof SettingsData !== "undefined" ? Math.max(4, (SettingsData.getPrimaryBarConfig()?.spacing ?? 4)) : 4;
         const defaultBorderSize = 2;
 
-        const cornerRadius = (typeof SettingsData !== "undefined" && SettingsData.hyprlandLayoutRadiusOverride >= 0) ? SettingsData.hyprlandLayoutRadiusOverride : defaultRadius;
+        const cornerRadius = Theme.windowRadius;
         const gapsOverride = typeof SettingsData !== "undefined" ? SettingsData.hyprlandLayoutGapsOverride : -1;
         const manageGaps = gapsOverride !== -2;
         const gapsIn = gapsOverride >= 0 ? gapsOverride : defaultGaps;
@@ -380,20 +428,25 @@ Singleton {
         if (frameEnabled && SettingsData.frameMode !== "connected")
             xrayNamespaces.push("dms:frame");
 
+        const tilingLayout = typeof SettingsData !== "undefined" ? SettingsData.hyprlandTilingLayout : "";
+
         const generalLines = [];
         if (manageGaps)
             generalLines.push(`gaps_in = ${gapsIn},`, `gaps_out = ${gapsOut},`);
         generalLines.push(`border_size = ${borderSize},`, `resize_on_border = ${resizeOnBorder},`);
+        if (tilingLayout)
+            generalLines.push(`layout = ${luaString(tilingLayout)},`);
+
+        const sections = [`\tgeneral = {\n${generalLines.map(l => "\t\t" + l).join("\n")}\n\t},`];
+        const tilingLines = tilingLayoutLines(tilingLayout);
+        if (tilingLines.length)
+            sections.push(`\t${tilingLayout} = {\n${tilingLines.map(l => "\t\t" + l).join("\n")}\n\t},`);
+        sections.push(`\tdecoration = {\n\t\trounding = ${cornerRadius},\n\t},`);
 
         let content = `-- Auto-generated by DMS — do not edit manually
 
 hl.config({
-	general = {
-${generalLines.map(l => "\t\t" + l).join("\n")}
-	},
-	decoration = {
-		rounding = ${cornerRadius},
-	},
+${sections.join("\n")}
 })
 `;
 
@@ -443,49 +496,16 @@ hl.layer_rule({
         });
     }
 
-    function transformToHyprland(transform) {
-        switch (transform) {
-        case "Normal":
-            return 0;
-        case "90":
-            return 1;
-        case "180":
-            return 2;
-        case "270":
-            return 3;
-        case "Flipped":
-            return 4;
-        case "Flipped90":
-            return 5;
-        case "Flipped180":
-            return 6;
-        case "Flipped270":
-            return 7;
+    function tilingLayoutLines(layout) {
+        switch (layout) {
+        case "dwindle":
+            return [`preserve_split = ${SettingsData.hyprlandDwindlePreserveSplit},`, `smart_split = ${SettingsData.hyprlandDwindleSmartSplit},`, `force_split = ${SettingsData.hyprlandDwindleForceSplit},`];
+        case "master":
+            return [`orientation = ${luaString(SettingsData.hyprlandMasterOrientation)},`, `new_status = ${luaString(SettingsData.hyprlandMasterNewStatus)},`, `new_on_top = ${SettingsData.hyprlandMasterNewOnTop},`, `mfact = ${SettingsData.hyprlandMasterSize / 100},`];
+        case "scrolling":
+            return [`direction = ${luaString(SettingsData.hyprlandScrollingDirection)},`, `column_width = ${SettingsData.hyprlandScrollingColumnWidth / 100},`, `fullscreen_on_one_column = ${SettingsData.hyprlandScrollingFullscreenOneColumn},`, `follow_focus = ${SettingsData.hyprlandScrollingFollowFocus},`];
         default:
-            return 0;
-        }
-    }
-
-    function hyprlandToTransform(value) {
-        switch (value) {
-        case 0:
-            return "Normal";
-        case 1:
-            return "90";
-        case 2:
-            return "180";
-        case 3:
-            return "270";
-        case 4:
-            return "Flipped";
-        case 5:
-            return "Flipped90";
-        case 6:
-            return "Flipped180";
-        case 7:
-            return "Flipped270";
-        default:
-            return "Normal";
+            return [];
         }
     }
 
@@ -635,6 +655,14 @@ hl.layer_rule({
         } else {
             const dispatcher = follow ? "movetoworkspace" : "movetoworkspacesilent";
             Hyprland.dispatch(`${dispatcher} ${workspace},${selector}`);
+        }
+    }
+
+    function focusMonitor(monitor) {
+        if (luaConfigActive) {
+            Hyprland.dispatch(`hl.dsp.focus({ monitor = ${luaString(monitor)} })`);
+        } else {
+            Hyprland.dispatch(`focusmonitor ${monitor}`);
         }
     }
 

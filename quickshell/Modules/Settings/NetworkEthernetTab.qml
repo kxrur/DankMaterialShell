@@ -20,33 +20,21 @@ Item {
         NetworkService.removeRef();
     }
 
-    DankFlickable {
-        anchors.fill: parent
-        clip: true
-        contentHeight: mainColumn.height + Theme.spacingXL
-        contentWidth: width
+    SettingsPage {
+        id: mainColumn
 
-        Column {
-            id: mainColumn
+        SettingsCard {
+            id: root
 
-            topPadding: 4
-            width: Math.min(600, parent.width - Theme.spacingL * 2)
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: Theme.spacingL
+            property string expandedEthDevice: ""
 
-            SettingsCard {
-                id: root
+            settingKey: "networkEthernet"
+            tags: ["ethernet", "wired", "network", "adapters", "connection"]
 
-                property string expandedEthDevice: ""
+            width: parent.width
 
-                title: I18n.tr("Ethernet")
-                iconName: "settings_ethernet"
-                settingKey: "networkEthernet"
-                tags: ["ethernet", "wired", "network", "adapters", "connection"]
-
-                width: parent.width
-
-                Column {
+            SettingsRow {
+                body: Column {
                     id: ethernetSection
 
                     width: parent.width
@@ -59,19 +47,13 @@ Item {
                             if (devices.length === 0)
                                 return I18n.tr("No adapters");
                             if (connected === 0)
-                                return devices.length === 1 ? I18n.tr("%1 adapter, none connected").arg(devices.length) : I18n.tr("%1 adapters, none connected").arg(devices.length);
-                            return I18n.tr("%1 connected").arg(connected);
+                                return devices.length === 1 ? I18n.tr("%1 adapter, none connected", "singular, ethernet summary, %1 is 1").arg(devices.length) : I18n.tr("%1 adapters, none connected", "plural, ethernet summary, %1 is a count").arg(devices.length);
+                            return I18n.tr("%1 connected", "network adapter summary, %1 is a count of connected adapters").arg(connected);
                         }
                         font.pixelSize: Theme.fontSizeSmall
                         color: NetworkService.ethernetConnected ? Theme.primary : Theme.surfaceVariantText
                         width: parent.width
                         horizontalAlignment: Text.AlignLeft
-                    }
-
-                    Rectangle {
-                        width: parent.width
-                        height: 1
-                        color: Theme.outlineStrong
                     }
 
                     Column {
@@ -80,9 +62,9 @@ Item {
                         visible: NetworkService.ethernetDevices.length > 0
 
                         StyledText {
-                            text: I18n.tr("Adapters")
+                            text: I18n.tr("Adapters", "noun plural, network adapter list heading")
                             font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
+                            font.weight: Theme.fontWeightMedium
                             color: Theme.surfaceText
                             width: parent.width
                             horizontalAlignment: Text.AlignLeft
@@ -102,17 +84,10 @@ Item {
                                 width: parent.width
                                 height: isExpanded ? 56 + ethExpandedContent.height : 56
                                 radius: Theme.cornerRadius
-                                color: ethDeviceMouseArea.containsMouse ? Theme.primaryHoverLight : Theme.surfaceLight
-                                border.width: isConnected ? 2 : 0
-                                border.color: Theme.primary
+                                color: isConnected ? Theme.selectedContainer : ethDeviceMouseArea.containsMouse ? Theme.primaryHoverLight : SettingsMetrics.controlColor
+                                border.width: Theme.layerOutlineWidth
+                                border.color: Theme.outlineMedium
                                 clip: true
-
-                                Behavior on height {
-                                    NumberAnimation {
-                                        duration: 150
-                                        easing.type: Easing.OutQuad
-                                    }
-                                }
 
                                 Column {
                                     anchors.fill: parent
@@ -133,7 +108,7 @@ Item {
                                             DankIcon {
                                                 name: "lan"
                                                 size: 20
-                                                color: isConnected ? Theme.primary : Theme.surfaceText
+                                                color: isConnected ? Theme.accentOnSelectedContainer : Theme.surfaceText
                                                 anchors.verticalCenter: parent.verticalCenter
                                             }
 
@@ -145,8 +120,8 @@ Item {
                                                 StyledText {
                                                     text: modelData.name || I18n.tr("Unknown")
                                                     font.pixelSize: Theme.fontSizeMedium
-                                                    color: isConnected ? Theme.primary : Theme.surfaceText
-                                                    font.weight: isConnected ? Font.Medium : Font.Normal
+                                                    color: isConnected ? Theme.onSelectedContainer : Theme.surfaceText
+                                                    font.weight: Theme.fontWeightMedium
                                                     elide: Text.ElideRight
                                                     width: parent.width
                                                     horizontalAlignment: Text.AlignLeft
@@ -170,7 +145,7 @@ Item {
                                                             }
                                                         }
                                                         font.pixelSize: Theme.fontSizeSmall
-                                                        color: isConnected ? Theme.primary : Theme.surfaceVariantText
+                                                        color: isConnected ? Theme.onSelectedContainer : Theme.surfaceVariantText
                                                     }
 
                                                     StyledText {
@@ -197,57 +172,30 @@ Item {
                                             anchors.verticalCenter: parent.verticalCenter
                                             spacing: Theme.spacingXS
 
-                                            Rectangle {
-                                                width: 28
-                                                height: 28
-                                                radius: 14
-                                                color: ethExpandBtn.containsMouse ? Theme.surfacePressed : Theme.withAlpha(Theme.surfacePressed, 0)
+                                            DankActionButton {
+                                                buttonSize: Theme.buttonHeightXXS
+                                                iconName: isExpanded ? "expand_less" : "expand_more"
+                                                iconColor: Theme.surfaceText
+                                                tooltipText: isExpanded ? I18n.tr("Collapse") : I18n.tr("Expand")
                                                 visible: isConnected
-
-                                                DankIcon {
-                                                    anchors.centerIn: parent
-                                                    name: isExpanded ? "expand_less" : "expand_more"
-                                                    size: 18
-                                                    color: Theme.surfaceText
-                                                }
-
-                                                MouseArea {
-                                                    id: ethExpandBtn
-                                                    anchors.fill: parent
-                                                    hoverEnabled: true
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: {
-                                                        if (isExpanded) {
-                                                            root.expandedEthDevice = "";
-                                                        } else {
-                                                            root.expandedEthDevice = modelData.name;
-                                                            NetworkService.fetchWiredNetworkInfo(NetworkService.ethernetConnectionUuid);
-                                                        }
+                                                onClicked: {
+                                                    if (isExpanded) {
+                                                        root.expandedEthDevice = "";
+                                                    } else {
+                                                        root.expandedEthDevice = modelData.name;
+                                                        NetworkService.fetchWiredNetworkInfo(NetworkService.ethernetConnectionUuid);
                                                     }
                                                 }
                                             }
 
-                                            Rectangle {
-                                                width: 28
-                                                height: 28
-                                                radius: 14
-                                                color: ethDisconnectBtn.containsMouse ? Theme.errorHover : Theme.withAlpha(Theme.errorHover, 0)
+                                            DankActionButton {
+                                                buttonSize: Theme.buttonHeightXXS
+                                                iconName: "link_off"
+                                                iconColor: Theme.surfaceVariantText
+                                                stateColor: Theme.error
+                                                tooltipText: I18n.tr("Disconnect")
                                                 visible: isConnected
-
-                                                DankIcon {
-                                                    anchors.centerIn: parent
-                                                    name: "link_off"
-                                                    size: 18
-                                                    color: ethDisconnectBtn.containsMouse ? Theme.error : Theme.surfaceVariantText
-                                                }
-
-                                                MouseArea {
-                                                    id: ethDisconnectBtn
-                                                    anchors.fill: parent
-                                                    hoverEnabled: true
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: NetworkService.disconnectEthernetDevice(modelData.name)
-                                                }
+                                                onClicked: NetworkService.disconnectEthernetDevice(modelData.name)
                                             }
                                         }
 
@@ -263,13 +211,6 @@ Item {
                                         id: ethExpandedContent
                                         width: parent.width
                                         visible: isExpanded
-
-                                        Rectangle {
-                                            width: parent.width - Theme.spacingM * 2
-                                            height: 1
-                                            x: Theme.spacingM
-                                            color: Theme.outlineLight
-                                        }
 
                                         Item {
                                             width: parent.width
@@ -294,17 +235,17 @@ Item {
 
                                                             if (dev.ip)
                                                                 fields.push({
-                                                                    label: I18n.tr("IP"),
+                                                                    label: "IP",
                                                                     value: dev.ip
                                                                 });
                                                             if (dev.speed && dev.speed > 0)
                                                                 fields.push({
-                                                                    label: I18n.tr("Speed"),
+                                                                    label: I18n.tr("Speed", "noun, ethernet link speed detail label"),
                                                                     value: dev.speed + " Mbps"
                                                                 });
                                                             if (dev.hwAddress)
                                                                 fields.push({
-                                                                    label: I18n.tr("MAC"),
+                                                                    label: "MAC",
                                                                     value: dev.hwAddress
                                                                 });
                                                             if (dev.driver)
@@ -320,37 +261,11 @@ Item {
                                                             return fields;
                                                         }
 
-                                                        delegate: Rectangle {
+                                                        delegate: DankDetailChip {
                                                             required property var modelData
-                                                            required property int index
 
-                                                            width: ethFieldContent.width + Theme.spacingM * 2
-                                                            height: 32
-                                                            radius: Theme.cornerRadius - 2
-                                                            color: Theme.floatingWindowFieldColor
-                                                            border.width: 1
-                                                            border.color: Theme.floatingWindowFieldBorderColor
-
-                                                            Row {
-                                                                id: ethFieldContent
-                                                                anchors.centerIn: parent
-                                                                spacing: Theme.spacingXS
-
-                                                                StyledText {
-                                                                    text: modelData.label + ":"
-                                                                    font.pixelSize: Theme.fontSizeSmall
-                                                                    color: Theme.surfaceVariantText
-                                                                    anchors.verticalCenter: parent.verticalCenter
-                                                                }
-
-                                                                StyledText {
-                                                                    text: modelData.value
-                                                                    font.pixelSize: Theme.fontSizeSmall
-                                                                    color: Theme.surfaceText
-                                                                    font.weight: Font.Medium
-                                                                    anchors.verticalCenter: parent.verticalCenter
-                                                                }
-                                                            }
+                                                            label: modelData.label
+                                                            value: modelData.value
                                                         }
                                                     }
                                                 }
@@ -378,16 +293,10 @@ Item {
                         spacing: Theme.spacingS
                         visible: NetworkService.wiredConnections.length > 0
 
-                        Rectangle {
-                            width: parent.width
-                            height: 1
-                            color: Theme.outlineStrong
-                        }
-
                         StyledText {
-                            text: I18n.tr("Saved Configurations")
+                            text: I18n.tr("Saved configurations")
                             font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
+                            font.weight: Theme.fontWeightMedium
                             color: Theme.surfaceText
                             width: parent.width
                             horizontalAlignment: Text.AlignLeft
@@ -403,9 +312,9 @@ Item {
                                 width: parent.width
                                 height: 48
                                 radius: Theme.cornerRadius
-                                color: wiredMouseArea.containsMouse ? Theme.primaryHoverLight : Theme.surfaceLight
-                                border.width: modelData.isActive ? 2 : 0
-                                border.color: Theme.primary
+                                color: modelData.isActive ? Theme.selectedContainer : wiredMouseArea.containsMouse ? Theme.primaryHoverLight : SettingsMetrics.controlColor
+                                border.width: Theme.layerOutlineWidth
+                                border.color: Theme.outlineMedium
 
                                 Row {
                                     anchors.left: parent.left
@@ -416,7 +325,7 @@ Item {
                                     DankIcon {
                                         name: "lan"
                                         size: 20
-                                        color: modelData.isActive ? Theme.primary : Theme.surfaceText
+                                        color: modelData.isActive ? Theme.accentOnSelectedContainer : Theme.surfaceText
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
 
@@ -427,14 +336,14 @@ Item {
                                         StyledText {
                                             text: modelData.id || I18n.tr("Unknown")
                                             font.pixelSize: Theme.fontSizeMedium
-                                            color: modelData.isActive ? Theme.primary : Theme.surfaceText
-                                            font.weight: modelData.isActive ? Font.Medium : Font.Normal
+                                            color: modelData.isActive ? Theme.onSelectedContainer : Theme.surfaceText
+                                            font.weight: Theme.fontWeightMedium
                                         }
 
                                         StyledText {
                                             text: modelData.isActive ? I18n.tr("Active") : ""
                                             font.pixelSize: Theme.fontSizeSmall
-                                            color: Theme.primary
+                                            color: Theme.onSelectedContainer
                                             visible: modelData.isActive
                                         }
                                     }

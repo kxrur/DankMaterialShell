@@ -16,6 +16,8 @@ Rectangle {
     height: Math.round(Theme.fontSizeMedium * 4.5)
     radius: Theme.cornerRadius
     color: Theme.floatingWindowNestedSurface
+    border.width: Theme.layerOutlineWidth
+    border.color: Theme.outlineMedium
 
     Rectangle {
         anchors.fill: parent
@@ -54,7 +56,7 @@ Rectangle {
             StyledText {
                 text: root.title
                 font.pixelSize: Theme.fontSizeSmall
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
             }
 

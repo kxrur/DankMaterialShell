@@ -55,7 +55,7 @@ PluginComponent {
                 model: root.displayedEmojis
                 StyledText {
                     text: modelData
-                    font.pixelSize: Theme.fontSizeLarge
+                    font.pixelSize: root.iconSize
                 }
             }
         }
@@ -70,7 +70,7 @@ PluginComponent {
                 model: root.displayedEmojis
                 StyledText {
                     text: modelData
-                    font.pixelSize: Theme.fontSizeMedium
+                    font.pixelSize: root.iconSize
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
             }
@@ -83,7 +83,6 @@ PluginComponent {
 
             headerText: I18n.trFor("exampleEmojiPlugin", "Emoji Picker")
             detailsText: I18n.trFor("exampleEmojiPlugin", "Click an emoji to copy it to clipboard")
-            showCloseButton: true
 
             property var allEmojis: ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "😙", "😋", "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🤫", "🤔", "🤐", "🤨", "😐", "😑", "😶", "😏", "😒", "🙄", "😬", "🤥", "😌", "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🤮", "🤧", "🥵", "🥶", "😶‍🌫️", "😵", "😵‍💫", "🤯", "🤠", "🥳", "😎", "🤓", "🧐", "😕", "😟", "🙁", "☹️", "😮", "😯", "😲", "😳", "🥺", "😦", "😧", "😨", "😰", "😥", "😢", "😭", "😱", "😖", "😣", "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠", "🤬", "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔", "❤️‍🔥", "❤️‍🩹", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟", "👍", "👎", "👊", "✊", "🤛", "🤜", "🤞", "✌️", "🤟", "🤘", "👌", "🤌", "🤏", "👈", "👉", "👆", "👇", "☝️", "✋", "🤚"]
 
@@ -105,7 +104,7 @@ PluginComponent {
                         width: 45
                         height: 45
                         radius: Theme.cornerRadius
-                        color: emojiMouseArea.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+                        color: emojiMouseArea.containsMouse ? Theme.chipSurface : Theme.cardSurface
                         border.width: 0
 
                         StyledText {

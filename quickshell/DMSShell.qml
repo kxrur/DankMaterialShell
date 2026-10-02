@@ -32,23 +32,26 @@ Item {
     id: root
     readonly property var log: Log.scoped("DMSShell")
     readonly property var _sessionsServiceRef: SessionsService
+    readonly property var _nightModeServiceRef: NightModeService
+    readonly property var _brightnessServiceRef: BrightnessService
+    readonly property var _refreshRateServiceRef: RefreshRateService
     readonly property var _displayServiceRef: DisplayService
 
     property var core: null
 
     property bool osdSurfacesLoaded: false
     property int pendingOsdResumeReloads: 0
-    readonly property var dankIslandScreens: Quickshell.screens.filter(screen => SettingsData.dankIslandCoversScreen(screen))
     readonly property var notificationPopupScreens: {
         const screens = SettingsData.notificationFocusedMonitor ? Quickshell.screens : SettingsData.getFilteredScreens("notifications");
-        return root.withoutDankIslandScreens(screens);
-    }
-    readonly property var legacySystemLevelOsdScreens: root.withoutDankIslandScreens(SettingsData.getFilteredScreens("osd"))
-
-    function withoutDankIslandScreens(screens) {
         if (!SettingsData.dankIslandEnabled)
             return screens;
-        return screens.filter(screen => root.dankIslandScreens.indexOf(screen) === -1);
+        return screens.filter(screen => !SettingsData.dankIslandHandlesNotifications(screen));
+    }
+    readonly property var legacySystemLevelOsdScreens: {
+        const screens = SettingsData.getFilteredScreens("osd");
+        if (!SettingsData.dankIslandEnabled)
+            return screens;
+        return screens.filter(screen => !SettingsData.dankIslandHandlesSystemOsd(screen));
     }
 
     function recreateOsdSurfaces() {
@@ -244,25 +247,26 @@ Item {
         dockEnabled = true;
         loginSoundTimer.start();
         osdStartupTimer.start();
+        if (SettingsData.controlCenterWidgets.some(widget => widget.id === "diskUsage" && widget.enabled !== false))
+            DgopService.initializeDiskMounts();
+        if (SettingsData.controlCenterWidgets.some(widget => widget.id === "user" && widget.enabled !== false && widget.uptime !== false))
+            DgopService.dgopAvailable;
 
         // These are dummy references just to trigger the singletons onCompleted to trigger
         PolkitService.polkitAvailable;
         DisplayConfigState.hasOutputBackend;
         PortalService.systemColorScheme;
-        IconThemeService.revision;
         DesktopService.isSystemd;
         TrashService.count;
         WallpaperCyclingService.cyclingActive;
         ThemeAutoService.active;
+        WellbeingService.tracking;
     }
 
     Loader {
         id: dockLoader
         active: root.dockEnabled
         asynchronous: false
-
-        property var currentPosition: SettingsData.dockPosition
-        property bool initialized: false
 
         sourceComponent: Dock {
             contextMenu: dockContextMenuLoader.item ? dockContextMenuLoader.item : null
@@ -272,22 +276,10 @@ Item {
         onLoaded: {
             if (item) {
                 dockContextMenuLoader.active = true;
-                if (SettingsData.dockShowTrash) {
+                if (SettingsData.dockConfigs.some(config => config.showTrash)) {
                     dockTrashContextMenuLoader.active = true;
                 }
             }
-        }
-
-        Component.onCompleted: {
-            initialized = true;
-        }
-
-        onCurrentPositionChanged: {
-            if (!initialized)
-                return;
-            const comp = sourceComponent;
-            sourceComponent = null;
-            sourceComponent = comp;
         }
     }
 
@@ -350,8 +342,8 @@ Item {
 
     Connections {
         target: SettingsData
-        function onDockShowTrashChanged() {
-            if (SettingsData.dockShowTrash) {
+        function onDockConfigsChanged() {
+            if (SettingsData.dockConfigs.some(config => config.showTrash)) {
                 dockTrashContextMenuLoader.active = true;
             }
         }
@@ -375,7 +367,7 @@ Item {
                 return;
             emptyTrashConfirmLoader.loadedModal.showWithOptions({
                 title: I18n.tr("Empty Trash"),
-                message: I18n.tr("Permanently delete %1 item(s)? This cannot be undone.").arg(itemCount),
+                message: I18n.tr("Permanently delete %1 item(s)? This cannot be undone.", "empty trash confirmation message, %1 is a count").arg(itemCount),
                 confirmText: I18n.tr("Empty"),
                 cancelText: I18n.tr("Cancel"),
                 confirmColor: Theme.error,
@@ -774,8 +766,10 @@ Item {
             PopoutService.spotlightBarModalLoader = spotlightBarModalLoader;
         }
 
-        DankLauncherV2ModalSpotlight {
+        DankLauncherV2ModalHost {
             id: spotlightBarModal
+            connected: false
+            spotlight: true
 
             Component.onCompleted: {
                 PopoutService.spotlightBarModal = spotlightBarModal;
@@ -840,7 +834,7 @@ Item {
 
         AppPickerModal {
             id: filePickerModal
-            title: I18n.tr("Open with...")
+            title: I18n.tr("Open with", "app picker title, followed by a list of apps") + "…"
             viewMode: SettingsData.appPickerViewMode || "grid"
 
             onViewModeChanged: {
@@ -854,6 +848,11 @@ Item {
             onApplicationSelected: (app, filePath) => {
                 if (!app)
                     return;
+                const entry = SessionService.resolveDesktopId(app.appId);
+                if (entry) {
+                    SessionService.launchDesktopEntry(entry, false, [filePath]);
+                    return;
+                }
                 let cmd = app.exec || "";
                 const escapedPath = shellEscape(filePath);
                 const escapedUri = shellEscape("file://" + filePath);
@@ -947,7 +946,7 @@ Item {
         }
     }
 
-    DankColorPickerModal {
+    ColorPickerModal {
         id: colorPickerModal
 
         Component.onCompleted: {
@@ -1153,6 +1152,25 @@ Item {
     }
 
     LazyLoader {
+        id: durationPopoutLoader
+
+        active: false
+
+        Component.onCompleted: {
+            PopoutService.durationPopoutLoader = durationPopoutLoader;
+        }
+
+        DurationPopout {
+            id: durationPopout
+            onPopoutClosed: PopoutService.unloadDurationPopout()
+
+            Component.onCompleted: {
+                PopoutService.durationPopout = durationPopout;
+            }
+        }
+    }
+
+    LazyLoader {
         id: switchUserModalLoader
 
         active: false
@@ -1327,11 +1345,6 @@ Item {
         sourceComponent: ChangelogModal {
             onChangelogDismissed: changelogLoader.active = false
             Component.onCompleted: show()
-        }
-
-        Component.onCompleted: {
-            if (ChangelogService.shouldShowChangelog)
-                active = true;
         }
 
         Connections {

@@ -53,7 +53,7 @@ func (b dnfBackend) Upgrade(ctx context.Context, opts UpgradeOptions, onLine fun
 }
 
 func dnfUpgradeArgv(bin string, opts UpgradeOptions) []string {
-	argv := []string{bin, "upgrade", "--refresh", "-y"}
+	argv := withAutoYes(opts, []string{bin, "upgrade", "--refresh"}, "-y")
 	if len(opts.Ignored) > 0 {
 		argv = append(argv, "--exclude="+strings.Join(opts.Ignored, ","))
 	}
@@ -115,7 +115,12 @@ func parseDnfList(text, backendID string, installed map[string]string) []Package
 		return nil
 	}
 	var pkgs []Package
+	seen := make(map[string]struct{})
 	for line := range strings.SplitSeq(text, "\n") {
+		// indented rows are packages being obsoleted, which are removals rather than upgrades
+		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			continue
+		}
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
@@ -129,6 +134,12 @@ func parseDnfList(text, backendID string, installed map[string]string) []Package
 		if !looksLikeRpmVersion(version) {
 			continue
 		}
+		// dnf prints one row per (package, repo), so one version in two repos appears twice
+		key := nameArch + "\t" + version
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		name := nameArch[:dot]
 		pkgs = append(pkgs, Package{
 			Name:        nameArch,

@@ -20,8 +20,13 @@ ShellRoot {
     readonly property bool runGreeter: Quickshell.env("DMS_RUN_GREETER") === "1" || Quickshell.env("DMS_RUN_GREETER") === "true"
     readonly property bool disableHotReload: Quickshell.env("DMS_DISABLE_HOT_RELOAD") === "1" || Quickshell.env("DMS_DISABLE_HOT_RELOAD") === "true"
 
+    Binding {
+        target: Quickshell
+        property: "watchFiles"
+        value: !entrypoint.disableHotReload && (entrypoint.runGreeter || !IdleService.isShellLocked)
+    }
+
     Component.onCompleted: {
-        Quickshell.watchFiles = !disableHotReload;
         DC.Style.theme = Theme;
         DC.Style.settings = SettingsData;
         DC.I18n.backend = I18n;
@@ -29,6 +34,8 @@ ShellRoot {
         DC.Log.backend = Log;
         DC.Host.session = SessionService;
         DC.Host.cache = CacheData;
+        DC.Host.files = FilesService;
+        void IconThemeService.ready;
         if (entrypoint.runGreeter)
             return;
         // Build the polkit agent here, outside incubation: first-touching it from a Connections target during DMSShell's async load crashed QQmlConnections::connectSignalsToMethods.

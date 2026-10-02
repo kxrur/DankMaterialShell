@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
 import Quickshell
-import Quickshell.Io
 import qs.Modals.Common
 import qs.Modals.FileBrowser
 import qs.Common
@@ -92,7 +91,7 @@ DankModal {
         }, response => {
             root.generating = false;
             if (response.error) {
-                ToastService.showError(I18n.tr("Failed to generate QR code: %1").arg(JSON.stringify(response.error)));
+                ToastService.showError(I18n.tr("Failed to generate QR code: %1", "error toast, %1 is the error details").arg(JSON.stringify(response.error)));
                 return;
             }
             if (!response.result)
@@ -130,26 +129,11 @@ DankModal {
             id: saveBrowser
 
             browserTitle: I18n.tr("Save QR Code")
-            browserIcon: "qr_code"
-            browserType: "default"
-            fileExtensions: ["*.png"]
-            allowStacking: true
-            saveMode: true
-            defaultFileName: "qrcode.png"
-            onFileSelected: path => {
-                const cleanPath = decodeURI(path.toString().replace(/^file:\/\//, ''));
-                copyQrCodeProcess.exec(["cp", "-f", root.normalQrCodePath, cleanPath]);
-            }
-
-            Process {
-                id: copyQrCodeProcess
-
-                stdout: StdioCollector {
-                    onStreamFinished: {
-                        saveBrowser.close();
-                    }
-                }
-            }
+            bucket: "qrcode"
+            filters: ["*.png"]
+            mode: "save"
+            defaultName: "qrcode.png"
+            onAccepted: paths => Quickshell.execDetached(["cp", "-f", root.normalQrCodePath, paths[0]])
         }
     }
 
@@ -175,13 +159,14 @@ DankModal {
                         text: I18n.tr("QR Generator")
                         font.pixelSize: Theme.fontSizeLarge
                         color: Theme.surfaceText
-                        font.weight: Font.Bold
+                        font.weight: Theme.fontWeightMedium
                         Layout.alignment: Qt.AlignLeft
                         Layout.fillWidth: true
                     }
 
                     DankActionButton {
                         iconName: "close"
+                        Accessible.name: I18n.tr("Close")
                         iconSize: Theme.iconSize - 4
                         iconColor: Theme.surfaceText
                         onClicked: root.hide()
@@ -252,7 +237,7 @@ DankModal {
                     DankButton {
                         text: I18n.tr("Save")
                         iconName: "save"
-                        backgroundColor: Theme.surfaceContainer
+                        backgroundColor: Theme.chipSurface
                         textColor: Theme.surfaceText
                         onClicked: {
                             contentItem.saveBrowserLoader.active = true;

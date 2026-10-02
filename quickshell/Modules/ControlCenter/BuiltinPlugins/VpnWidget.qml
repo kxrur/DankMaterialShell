@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Common
 import qs.Services
+import qs.Modules.ControlCenter.Widgets
 import qs.Modules.ControlCenter.Details
 import qs.Modules.Plugins
 
@@ -15,7 +16,7 @@ PluginComponent {
     readonly property bool vpnActivated: DMSNetworkService.connected && DMSNetworkService.activeState === "activated"
 
     ccWidgetIcon: "vpn_key"
-    ccWidgetPrimaryText: I18n.tr("VPN")
+    ccWidgetPrimaryText: I18n.tr("VPN", "virtual private network, widget and page title")
     ccWidgetSecondaryText: {
         if (vpnActivating)
             return I18n.tr("Connecting...");
@@ -31,8 +32,18 @@ PluginComponent {
     onCcWidgetToggled: DMSNetworkService.toggleVpn()
 
     ccDetailContent: Component {
-        VpnDetailContent {
-            listHeight: 260
+        VpnDetailContent {}
+    }
+    ccExpandedContent: Component {
+        CcTileActions {
+            actions: DMSNetworkService.profiles.map(profile => ({
+                        text: profile.name,
+                        icon: "vpn_key",
+                        toggle: true,
+                        active: DMSNetworkService.vpnStateForUuid(profile.uuid) === "activated",
+                        enabled: !DMSNetworkService.isVpnConnectingUuid(profile.uuid),
+                        trigger: () => DMSNetworkService.toggle(profile.uuid)
+                    }))
         }
     }
 }

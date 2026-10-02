@@ -7,6 +7,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Services
+import "../Common/OutputModel.js" as OutputModel
 
 // Native MangoWM IPC client. mango advertises a JSON-over-Unix-socket protocol
 // via MANGO_INSTANCE_SIGNATURE; each connection issues one `watch <target>` verb
@@ -106,8 +107,10 @@ Singleton {
         connected: root.available
 
         onConnectionStateChanged: {
-            if (connected)
+            if (linkUp) {
                 send("watch all-monitors");
+                root.refreshLayouts();
+            }
         }
 
         parser: SplitParser {
@@ -121,7 +124,7 @@ Singleton {
         connected: root.available
 
         onConnectionStateChanged: {
-            if (connected)
+            if (linkUp)
                 send("watch all-clients");
         }
 
@@ -160,6 +163,10 @@ Singleton {
     property bool _dispatchConnectionUsed: false
 
     function dispatch(command, callback) {
+        request("dispatch " + command, callback);
+    }
+
+    function request(command, callback) {
         if (!root.available)
             return;
         _dispatchQueue.push({
@@ -174,7 +181,7 @@ Singleton {
             return;
         _dispatchConnectionUsed = true;
         _dispatchInFlight = _dispatchQueue.shift();
-        dispatchSocket.send("dispatch " + _dispatchInFlight.command);
+        dispatchSocket.send(_dispatchInFlight.command);
     }
 
     function _onDispatchReply(line) {
@@ -471,6 +478,7 @@ Singleton {
             }
             if (shouldShowToast)
                 ToastService.showInfo(I18n.tr("mango: config reloaded"), "", "", "mango-config");
+            root.refreshLayouts();
         });
     }
 
@@ -478,26 +486,48 @@ Singleton {
         dispatch("quit");
     }
 
-    // mango tag dispatches act on the focused monitor; tagIndex is 0-based
-    // (dwl model), mango `view`/`toggleview` take a 1-based tag number.
+    function dispatchOnOutput(outputName, command) {
+        if (!outputName || !getOutputState(outputName))
+            return;
+        // Always queue the focus: IPC snapshots can lag behind earlier commands.
+        dispatch("focusmon," + outputName);
+        dispatch(command);
+    }
+
+    // The dwl model is 0-based; Mango view/toggleview take a 1-based tag number.
     function switchToTag(outputName, tagIndex) {
-        dispatch("view," + (tagIndex + 1));
+        dispatchOnOutput(outputName, "view," + (tagIndex + 1));
     }
 
     function toggleTag(outputName, tagIndex) {
-        dispatch("toggleview," + (tagIndex + 1));
+        dispatchOnOutput(outputName, "toggleview," + (tagIndex + 1));
     }
 
-    // mango's tiling layouts are a fixed compiled-in set the IPC doesn't expose,
-    // so mirror it here in mango's layouts[] order (layout_index aligns). The
-    // parallel name list exists because `setlayout` dispatches by name, not index.
-    readonly property var layouts: ["T", "S", "G", "M", "K", "CT", "RT", "VS", "VT", "VG", "VK", "DW", "F", "VF"]
-    readonly property var _layoutNames: ["tile", "scroller", "grid", "monocle", "deck", "center_tile", "right_tile", "vertical_scroller", "vertical_tile", "vertical_grid", "vertical_deck", "dwindle", "fair", "vertical_fair"]
+    // Mango before 0.16.1 has no `get layouts`; retain its compiled-in order.
+    property var _availableLayouts: null
+    readonly property var layouts: _availableLayouts ? _availableLayouts.map(layout => layout.symbol) : ["T", "S", "G", "M", "K", "CT", "RT", "VS", "VT", "VG", "VK", "DW", "F", "VF"]
+    readonly property var _layoutNames: _availableLayouts ? _availableLayouts.map(layout => layout.name) : ["tile", "scroller", "grid", "monocle", "deck", "center_tile", "right_tile", "vertical_scroller", "vertical_tile", "vertical_grid", "vertical_deck", "dwindle", "fair", "vertical_fair"]
+
+    function refreshLayouts() {
+        request("get layouts", line => {
+            let data;
+            try {
+                data = JSON.parse(line);
+            } catch (e) {
+                return;
+            }
+            if (!Array.isArray(data?.layouts) || data.layouts.length === 0)
+                return;
+            if (!data.layouts.every(layout => typeof layout?.name === "string" && layout.name.length > 0 && typeof layout.symbol === "string"))
+                return;
+            root._availableLayouts = data.layouts;
+        });
+    }
 
     function setLayout(outputName, index) {
         const name = _layoutNames[index];
         if (name)
-            dispatch("setlayout," + name);
+            dispatchOnOutput(outputName, "setlayout," + name);
     }
 
     function cycleKeyboardLayout() {
@@ -541,29 +571,6 @@ Singleton {
         }
     }
 
-    function transformToMango(transform) {
-        switch (transform) {
-        case "Normal":
-            return 0;
-        case "90":
-            return 1;
-        case "180":
-            return 2;
-        case "270":
-            return 3;
-        case "Flipped":
-            return 4;
-        case "Flipped90":
-            return 5;
-        case "Flipped180":
-            return 6;
-        case "Flipped270":
-            return 7;
-        default:
-            return 0;
-        }
-    }
-
     function generateOutputsConfig(outputsData, callback, skipReload) {
         if (!outputsData || Object.keys(outputsData).length === 0) {
             if (callback)
@@ -596,7 +603,7 @@ Singleton {
             const x = output.logical?.x ?? 0;
             const y = output.logical?.y ?? 0;
             const scale = output.logical?.scale ?? 1.0;
-            const transform = transformToMango(output.logical?.transform ?? "Normal");
+            const transform = OutputModel.transformIndex(output.logical?.transform ?? "Normal");
             const vrr = output.vrr_enabled ? 1 : 0;
 
             // Anchor the name regex: mango matches `name:` unanchored (first-match
@@ -630,11 +637,10 @@ Singleton {
         if (!CompositorService.isMango)
             return;
 
-        const defaultRadius = typeof SettingsData !== "undefined" ? SettingsData.cornerRadius : 12;
         const defaultGaps = typeof SettingsData !== "undefined" ? Math.max(4, (SettingsData.getPrimaryBarConfig()?.spacing ?? 4)) : 4;
         const defaultBorderSize = 2;
 
-        const cornerRadius = (typeof SettingsData !== "undefined" && SettingsData.mangoLayoutRadiusOverride >= 0) ? SettingsData.mangoLayoutRadiusOverride : defaultRadius;
+        const cornerRadius = Theme.windowRadius;
         const gapsOverride = typeof SettingsData !== "undefined" ? SettingsData.mangoLayoutGapsOverride : -1;
         const manageGaps = gapsOverride !== -2;
         const gapsIn = gapsOverride >= 0 ? gapsOverride : defaultGaps;

@@ -139,7 +139,9 @@ Variants {
             property int _freezeWaitFrames: 0
             readonly property bool overviewBlurActive: CompositorService.isNiri && SettingsData.blurWallpaperOnOverview && NiriService.inOverview && currentSource !== ""
             readonly property var backingWindow: Window.window
-            readonly property bool renderActive: !source || effectActive || overviewBlurActive || pendingWallpaper !== "" || _deferredSource !== "" || changePending || _freezeWaitFrames > 0 || frameAnim.running || currentWallpaper.status === Image.Loading || nextWallpaper.status === Image.Loading
+            readonly property bool showsBackdrop: !source || isColorSource || currentWallpaper.status === Image.Error
+            readonly property bool backdropBusy: showsBackdrop && !(backdropLoader.item?.ready ?? false)
+            readonly property bool renderActive: backdropBusy || effectActive || overviewBlurActive || pendingWallpaper !== "" || _deferredSource !== "" || changePending || _freezeWaitFrames > 0 || frameAnim.running || currentWallpaper.status === Image.Loading || nextWallpaper.status === Image.Loading
             property int _settleFrames: 3
 
             function invalidate() {
@@ -254,48 +256,43 @@ Variants {
                 }
             }
 
-            Connections {
-                target: SettingsData
-                function onWallpaperFillModeChanged() {
-                    root.regenerate();
-                }
-                function onEffectiveWallpaperBackgroundColorChanged() {
-                    root.invalidate();
-                }
-            }
+            readonly property string settingsWallpaperFillMode: SettingsData.wallpaperFillMode
+            readonly property color settingsWallpaperBackgroundColor: SettingsData.effectiveWallpaperBackgroundColor
 
-            Connections {
-                target: SessionData
-                function onMonitorWallpaperFillModesChanged() {
-                    root.regenerate();
-                }
-                function onPerMonitorWallpaperChanged() {
-                    root.regenerate();
-                }
-            }
+            onSettingsWallpaperFillModeChanged: regenerate()
+            onSettingsWallpaperBackgroundColorChanged: invalidate()
+
+            readonly property var sessionMonitorWallpaperFillModes: SessionData.monitorWallpaperFillModes
+            readonly property bool sessionPerMonitorWallpaper: SessionData.perMonitorWallpaper
+
+            onSessionMonitorWallpaperFillModesChanged: regenerate()
+            onSessionPerMonitorWallpaperChanged: regenerate()
 
             // Theme changes repaint DankBackdrop but nothing else wakes the render loop
-            Connections {
-                target: Theme
-                enabled: root.isColorSource || currentWallpaper.status === Image.Error
-                function onPrimaryChanged() {
-                    root.invalidate();
-                }
-                function onBackgroundChanged() {
-                    root.invalidate();
-                }
+            readonly property color themePrimary: Theme.primary
+            readonly property color themeBackground: Theme.background
+
+            onThemePrimaryChanged: {
+                if (!showsBackdrop)
+                    return;
+                invalidate();
             }
 
-            Connections {
-                target: IdleService
-                function onIsShellLockedChanged() {
-                    if (IdleService.isShellLocked)
-                        return;
-                    root.invalidate();
-                    // Catches silent rebinds during lock that no signal reports.
-                    if (root.effectiveScrolling)
-                        surfaceReattach.restart();
-                }
+            onThemeBackgroundChanged: {
+                if (!showsBackdrop)
+                    return;
+                invalidate();
+            }
+
+            readonly property bool idleShellLocked: IdleService.isShellLocked
+
+            onIdleShellLockedChanged: {
+                if (idleShellLocked)
+                    return;
+                invalidate();
+                // Catches silent rebinds during lock that no signal reports.
+                if (effectiveScrolling)
+                    surfaceReattach.restart();
             }
 
             function _recheckScreenScale() {
@@ -411,7 +408,7 @@ Variants {
                     if (currentWorkspaceIndex < 0)
                         currentWorkspaceIndex = 0;
 
-                    const scrollPercent = totalWorkspaces > 1 ? ((currentWorkspaceIndex - 1) / (totalWorkspaces - 1)) * 100.0 : 0.0;
+                    const scrollPercent = totalWorkspaces > 1 ? (currentWorkspaceIndex / (totalWorkspaces - 1)) * 100.0 : 0.0;
 
                     newTargetX = scrollPercent;
                 }
@@ -717,8 +714,9 @@ Variants {
             }
 
             Loader {
+                id: backdropLoader
                 anchors.fill: parent
-                active: !root.source || root.isColorSource || currentWallpaper.status === Image.Error
+                active: root.showsBackdrop
                 asynchronous: true
 
                 sourceComponent: DankBackdrop {

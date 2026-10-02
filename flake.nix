@@ -111,7 +111,7 @@
               inherit version;
               pname = "dms-shell";
               src = ./core;
-              vendorHash = "sha256-Ls6Dquwt0fzDCEjZ6FfTsZTXDI8408mFdByv/OWHVgI=";
+              vendorHash = "sha256-iiZ1sCY6KlVQ5kNaIAmOcs+AUfZRTzRqAw9lYDsbOn8=";
 
               subPackages = [ "cmd/dms" ];
 
@@ -128,15 +128,13 @@
 
               postInstall = ''
                 mkdir -p $out/share/quickshell/dms
-                cp -r ${rootSrc}/quickshell/. $out/share/quickshell/dms/
-                chmod -R u+w $out/share/quickshell/dms/tests
-                rm -rf $out/share/quickshell/dms/tests
+                tar -C ${rootSrc}/quickshell --mode=u+w --exclude-from=${rootSrc}/scripts/shell-test-excludes.txt -cf - . \
+                  | tar -C $out/share/quickshell/dms -xf -
 
                 rm -f $out/share/quickshell/dms/DankCommon
-                cp -r ${dank-qml-common}/DankCommon $out/share/quickshell/dms/DankCommon
-                chmod -R u+w $out/share/quickshell/dms/DankCommon
+                tar -C ${dank-qml-common} --mode=u+w --exclude-from=${rootSrc}/scripts/shell-test-excludes.txt -cf - DankCommon \
+                  | tar -C $out/share/quickshell/dms -xf -
 
-                chmod u+w $out/share/quickshell/dms/VERSION
                 echo "${version}" > $out/share/quickshell/dms/VERSION
 
                 # Install desktop file and icon
@@ -146,8 +144,8 @@
                   $out/share/applications/com.danklinux.dms.desktop
                 install -D ${rootSrc}/assets/com.danklinux.dms.notepad.desktop \
                   $out/share/applications/com.danklinux.dms.notepad.desktop
-                install -D ${rootSrc}/core/assets/danklogo.svg \
-                  $out/share/hicolor/scalable/apps/danklogo.svg
+                install -D ${rootSrc}/assets/com.danklinux.dms.svg \
+                  $out/share/icons/hicolor/scalable/apps/com.danklinux.dms.svg
 
                 # Snapshot pre-wrap Qt paths so launched apps get their own, not DMS's pins.
                 wrapProgram $out/bin/dms \
@@ -237,6 +235,22 @@
             kdePackages.qtdeclarative
           ]
           ++ (qmlPkgs pkgs);
+          # the surface fixtures run niri on winit/X11, which dlopens these
+          niriForTests = pkgs.symlinkJoin {
+            name = "niri-x11";
+            paths = [ pkgs.niri ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postBuild = ''
+              wrapProgram $out/bin/niri --prefix LD_LIBRARY_PATH : ${
+                pkgs.lib.makeLibraryPath [
+                  (pkgs.libx11 or pkgs.xorg.libX11)
+                  (pkgs.libxcb or pkgs.xorg.libxcb)
+                  (pkgs.libxcursor or pkgs.xorg.libXcursor)
+                  (pkgs.libxi or pkgs.xorg.libXi)
+                ]
+              }
+            '';
+          };
         in
         {
           default = pkgs.mkShell {
@@ -249,6 +263,9 @@
                 delve
                 go-tools
                 gnumake
+                nodejs
+                (python3.withPackages (ps: [ ps.dbus-next ]))
+                matugen
 
                 prek
                 uv # for prek
@@ -258,7 +275,8 @@
                 nixd
                 nil
               ]
-              ++ devQmlPkgs;
+              ++ devQmlPkgs
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ niriForTests pkgs.xvfb pkgs.dbus ];
 
             shellHook = ''
               touch quickshell/.qmlls.ini 2>/dev/null

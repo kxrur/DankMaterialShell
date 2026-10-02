@@ -139,18 +139,30 @@ Singleton {
 
     function useLocale(localeTag, fileUrl) {
         _resolvedLocale = localeTag || "en";
-        _selectedPath = fileUrl;
-        translationsLoaded = false;
-        translations = ({});
+        _selectTranslationFile(fileUrl);
         log.info(`I18n: Using locale '${localeTag}' from ${fileUrl}`);
+        if (commonDir.status === FolderListModel.Ready)
+            _pickCommonTranslation();
         localeApplied();
     }
 
+    function _selectTranslationFile(fileUrl) {
+        const previousPath = String(_selectedPath);
+        _selectedPath = fileUrl;
+        if (translationsLoaded && String(_selectedPath) === previousPath)
+            return;
+        translationsLoaded = false;
+        translations = ({});
+    }
+
     function _fallbackToEnglish() {
+        _resolvedLocale = "en";
         _selectedPath = "";
         translationsLoaded = false;
         translations = ({});
         log.warn("Falling back to built-in English strings");
+        if (commonDir.status === FolderListModel.Ready)
+            _pickCommonTranslation();
         localeApplied();
     }
 
@@ -181,18 +193,32 @@ Singleton {
             if (name && name.endsWith(".json"))
                 present[name.slice(0, -5)] = true;
         }
-        for (let i = 0; i < _candidates.length; i++) {
-            if (!present[_candidates[i]])
+        const tag = _resolvedLocale || "en";
+        const candidates = [tag, tag.replace("_", "-"), tag.split(/[_-]/)[0]].filter(c => c && c !== "en");
+        for (let i = 0; i < candidates.length; i++) {
+            if (!present[candidates[i]])
                 continue;
-            _commonSelectedPath = commonTranslationsFolder + "/" + _candidates[i] + ".json";
+            _commonSelectedPath = commonTranslationsFolder + "/" + candidates[i] + ".json";
             return;
+        }
+        _commonSelectedPath = "";
+        commonTranslations = ({});
+        commonTranslationsLoaded = false;
+    }
+
+    readonly property var _termIndexes: ({})
+
+    onTranslationsChanged: delete _termIndexes["app"]
+    onCommonTranslationsChanged: delete _termIndexes["common"]
+    onPluginTranslationsChanged: {
+        for (const catalog of Object.keys(_termIndexes)) {
+            if (catalog.startsWith("plugin:"))
+                delete _termIndexes[catalog];
         }
     }
 
-    readonly property var _termIndexes: new WeakMap()
-
-    function _termIndex(table) {
-        const cached = _termIndexes.get(table);
+    function _termIndex(catalog, table) {
+        const cached = _termIndexes[catalog];
         if (cached)
             return cached;
         const index = {};
@@ -205,18 +231,18 @@ Singleton {
                     index[term] = bucket[term];
             }
         }
-        _termIndexes.set(table, index);
+        _termIndexes[catalog] = index;
         return index;
     }
 
-    function _lookup(table, term, context) {
+    function _lookup(catalog, table, term, context) {
         if (!table)
             return "";
         if (context && table[context] && table[context][term])
             return table[context][term];
         if (table[term] && table[term][term])
             return table[term][term];
-        return _termIndex(table)[term] || "";
+        return _termIndex(catalog, table)[term] || "";
     }
 
     // isRealContext is consumed by translations/extract_translations.py only:
@@ -225,12 +251,12 @@ Singleton {
     // in the export, a comment-only context does not.
     function tr(term, context, isRealContext) {
         if (translationsLoaded) {
-            const hit = _lookup(translations, term, context);
+            const hit = _lookup("app", translations, term, context);
             if (hit)
                 return hit;
         }
         if (commonTranslationsLoaded) {
-            const hit = _lookup(commonTranslations, term, context);
+            const hit = _lookup("common", commonTranslations, term, context);
             if (hit)
                 return hit;
         }
@@ -240,11 +266,26 @@ Singleton {
     function trFor(pluginId, term, context, isRealContext) {
         const table = pluginTranslations[pluginId];
         if (table) {
-            const hit = _lookup(table, term, context);
+            const hit = _lookup("plugin:" + pluginId, table, term, context);
             if (hit)
                 return hit;
         }
         return tr(term, context);
+    }
+
+    function duration(seconds) {
+        if (seconds < 1)
+            return I18n.tr("%1 ms", "duration in milliseconds, %1 is a number").arg(Math.round(seconds * 1000));
+        const units = [[86400, I18n.tr("%1 day", "duration, singular, %1 is 1"), I18n.tr("%1 days", "duration, plural, %1 is a number")], [3600, I18n.tr("%1 hour", "duration, singular, %1 is 1"), I18n.tr("%1 hours", "duration, plural, %1 is a number")], [60, I18n.tr("%1 minute", "duration, singular, %1 is 1"), I18n.tr("%1 minutes", "duration, plural, %1 is a number")], [1, I18n.tr("%1 second", "duration, singular, %1 is 1"), I18n.tr("%1 seconds", "duration, plural, %1 is a number")]];
+        const parts = [];
+        let rest = Math.round(seconds);
+        for (const unit of units) {
+            const count = Math.floor(rest / unit[0]);
+            rest -= count * unit[0];
+            if (count > 0)
+                parts.push(unit[count === 1 ? 1 : 2].arg(count));
+        }
+        return parts.join(" ");
     }
 
     function trContext(context, term) {

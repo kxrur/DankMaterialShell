@@ -14,6 +14,10 @@ import (
 )
 
 const (
+	AppID = "com.danklinux.dms"
+
+	appName = "DMS"
+
 	notifyDest      = "org.freedesktop.Notifications"
 	notifyPath      = "/org/freedesktop/Notifications"
 	notifyInterface = "org.freedesktop.Notifications"
@@ -31,6 +35,8 @@ type Notification struct {
 	Body     string
 	FilePath string
 	Timeout  int32
+	// Pairs of id, label; ignored when FilePath is set.
+	Actions []string
 }
 
 func Send(n Notification) (uint32, error) {
@@ -40,28 +46,33 @@ func Send(n Notification) (uint32, error) {
 	}
 
 	if n.AppName == "" {
-		n.AppName = "DMS"
+		n.AppName = appName
+	}
+	if n.Icon == "" && n.AppName == appName {
+		n.Icon = AppID
 	}
 	if n.Timeout == 0 {
 		n.Timeout = 5000
 	}
 
-	if len(n.Summary) > maxSummaryLen {
-		n.Summary = n.Summary[:maxSummaryLen-3] + "..."
-	}
-	if len(n.Body) > maxBodyLen {
-		n.Body = n.Body[:maxBodyLen-3] + "..."
-	}
+	n.Summary = truncate(n.Summary, maxSummaryLen)
+	n.Body = truncate(n.Body, maxBodyLen)
 
-	var actions []string
+	actions := n.Actions
 	if n.FilePath != "" {
 		actions = []string{
 			"open", "Open",
 			"folder", "Open Folder",
 		}
 	}
+	if actions == nil {
+		actions = []string{}
+	}
 
 	hints := map[string]dbus.Variant{}
+	if n.AppName == appName {
+		hints["desktop-entry"] = dbus.MakeVariant(AppID)
+	}
 	if n.FilePath != "" {
 		imgPath := n.FilePath
 		if !strings.HasPrefix(imgPath, "file://") {
@@ -189,4 +200,13 @@ func openPath(path string) {
 		Setsid: true,
 	}
 	cmd.Start()
+}
+
+// Cuts on rune boundaries; a byte slice mid-character makes the dbus encoder reject the string.
+func truncate(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes-3]) + "..."
 }

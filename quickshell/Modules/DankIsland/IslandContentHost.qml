@@ -22,6 +22,12 @@ Item {
     required property bool expanded
     required property bool pointerInside
     required property string activityId
+    property bool freeMode: false
+    property Component compactFaceOverride: null
+    // Hosted islands fold the slot anchor into every target; the face must pin to the same resolved slot.
+    property var resolveTarget: target => target
+    // Embedded sheets grow by this on the near edge; the face keeps its content size below the fold.
+    property real expandedInset: 0
     required property Component homeCompactComponent
     required property Component homeExpandedComponent
     required property Component mediaCompactComponent
@@ -40,6 +46,8 @@ Item {
     required property Component notificationExpandedComponent
     required property Component notificationCenterCompactComponent
     required property Component notificationCenterExpandedComponent
+    required property Component clipboardCompactComponent
+    required property Component clipboardExpandedComponent
 
     readonly property real compactFade: root.fadeCompact(root.morphProgress)
     readonly property real expandedFade: root.fadeExpanded(root.morphProgress)
@@ -86,14 +94,30 @@ Item {
             "launcher": launcherExpandedLoader,
             "wallpaper": wallpaperExpandedLoader,
             "weather": weatherExpandedLoader,
-            "notificationcenter": notificationCenterExpandedLoader
+            "notificationcenter": notificationCenterExpandedLoader,
+            "clipboard": clipboardExpandedLoader,
+            "controlcenter": controlCenterExpandedLoader
         })
 
     function requestActivityFocus() {
+        if (root.activityId === "launcher" && launcherExpandedLoader.active) {
+            // Reserve focus until the launcher is ready.
+            root.refocusLauncher();
+            return true;
+        }
         const face = root.focusableFaces[root.activityId]?.item;
         if (!face || typeof face.focusFace !== "function")
             return false;
         return face.focusFace() === true;
+    }
+
+    function refocusLauncher() {
+        if (root.activityId !== "launcher" || !root.controller.keyboardDismissRequested || !launcherExpandedLoader.enabled)
+            return;
+        const face = launcherExpandedLoader.item;
+        if (!face || face.activeFocus)
+            return;
+        face.focusFace();
     }
 
     function latchHomeExpanded() {
@@ -142,16 +166,18 @@ Item {
     // Pinned to the compact target's own screen slot so the face holds still while the island morphs.
     component CompactFace: Loader {
         required property string activity
-        readonly property var target: root.controller.compactTargetFor(activity)
+        required property Component face
+        readonly property var target: root.resolveTarget(root.controller.compactTargetFor(activity))
         readonly property bool isVertical: root.controller.isVertical
         readonly property real alongPos: isVertical ? Math.round((root.hostHeight - target.height) / 2 + target.offsetAlong) - Math.round(root.islandY) : Math.round((root.hostWidth - target.width) / 2 + target.offsetAlong) - Math.round(root.islandX)
         readonly property real crossPos: isVertical ? Math.round((parent.width - width) / 2) : Math.round((parent.height - height) / 2)
 
-        x: isVertical ? crossPos : alongPos
-        y: isVertical ? alongPos : crossPos
+        x: root.freeMode ? Math.round((parent.width - width) / 2) : (isVertical ? crossPos : alongPos)
+        y: root.freeMode ? Math.round((parent.height - height) / 2) : (isVertical ? alongPos : crossPos)
         width: target.width
         height: target.height
         asynchronous: false
+        sourceComponent: root.compactFaceOverride && root.controller.usesDotFace(activity) ? root.compactFaceOverride : face
         visible: opacity > 0.001
         enabled: opacity >= 0.5
     }
@@ -159,7 +185,10 @@ Item {
     component ExpandedFace: Loader {
         required property string activity
         readonly property var target: root.controller.expandedTargetFor(activity)
+        readonly property bool isVertical: root.controller.isVertical
 
+        x: isVertical && !root.controller.farEdge ? root.expandedInset : 0
+        y: !isVertical && !root.controller.farEdge ? root.expandedInset : 0
         width: target.width
         height: target.height
         visible: opacity > 0.001
@@ -169,7 +198,7 @@ Item {
     CompactFace {
         active: true
         activity: "home"
-        sourceComponent: root.homeCompactComponent
+        face: root.homeCompactComponent
         opacity: root.compactOpacity("home")
     }
 
@@ -186,7 +215,7 @@ Item {
     CompactFace {
         active: root.mediaSurfaceActive
         activity: "media"
-        sourceComponent: root.mediaCompactComponent
+        face: root.mediaCompactComponent
         opacity: root.compactOpacity("media")
     }
 
@@ -194,7 +223,6 @@ Item {
         id: mediaExpandedLoader
 
         activity: "media"
-        height: Math.max(target.height, root.height)
         active: root.mediaSurfaceActive && (root.expanded || root.expandedFade > 0)
         asynchronous: false
         sourceComponent: root.mediaExpandedComponent
@@ -204,7 +232,7 @@ Item {
     CompactFace {
         active: root.surfaceActive("launcher")
         activity: "launcher"
-        sourceComponent: root.launcherCompactComponent
+        face: root.launcherCompactComponent
         opacity: root.compactOpacity("launcher")
     }
 
@@ -216,16 +244,25 @@ Item {
         asynchronous: true
         sourceComponent: root.launcherExpandedComponent
         opacity: root.expandedOpacity("launcher")
+        onEnabledChanged: {
+            if (enabled)
+                root.refocusLauncher();
+        }
+        onItemChanged: {
+            if (item)
+                root.refocusLauncher();
+        }
     }
 
     CompactFace {
         active: root.surfaceActive("controlcenter")
         activity: "controlcenter"
-        sourceComponent: root.controlCenterCompactComponent
+        face: root.controlCenterCompactComponent
         opacity: root.compactOpacity("controlcenter")
     }
 
     ExpandedFace {
+        id: controlCenterExpandedLoader
         activity: "controlcenter"
         active: root.controller.visualsRequested("controlcenter")
         asynchronous: false
@@ -236,7 +273,7 @@ Item {
     CompactFace {
         active: root.surfaceActive("wallpaper")
         activity: "wallpaper"
-        sourceComponent: root.wallpaperCompactComponent
+        face: root.wallpaperCompactComponent
         opacity: root.compactOpacity("wallpaper")
     }
 
@@ -253,7 +290,7 @@ Item {
     CompactFace {
         active: root.surfaceActive("weather")
         activity: "weather"
-        sourceComponent: root.weatherCompactComponent
+        face: root.weatherCompactComponent
         opacity: root.compactOpacity("weather")
     }
 
@@ -270,7 +307,7 @@ Item {
     CompactFace {
         active: root.surfaceActive("notificationcenter")
         activity: "notificationcenter"
-        sourceComponent: root.notificationCenterCompactComponent
+        face: root.notificationCenterCompactComponent
         opacity: root.compactOpacity("notificationcenter")
     }
 
@@ -285,9 +322,26 @@ Item {
     }
 
     CompactFace {
+        active: root.surfaceActive("clipboard")
+        activity: "clipboard"
+        face: root.clipboardCompactComponent
+        opacity: root.compactOpacity("clipboard")
+    }
+
+    ExpandedFace {
+        id: clipboardExpandedLoader
+
+        activity: "clipboard"
+        active: root.controller.visualsRequested("clipboard")
+        asynchronous: true
+        sourceComponent: root.clipboardExpandedComponent
+        opacity: root.expandedOpacity("clipboard")
+    }
+
+    CompactFace {
         active: root.systemSurfaceActive
         activity: "volume"
-        sourceComponent: root.systemCompactComponent
+        face: root.systemCompactComponent
         opacity: Math.max(root.compactOpacity("volume"), root.compactOpacity("brightness"))
     }
 
@@ -302,7 +356,7 @@ Item {
     CompactFace {
         active: root.surfaceActive("notification")
         activity: "notification"
-        sourceComponent: root.notificationCompactComponent
+        face: root.notificationCompactComponent
         opacity: root.compactOpacity("notification")
     }
 

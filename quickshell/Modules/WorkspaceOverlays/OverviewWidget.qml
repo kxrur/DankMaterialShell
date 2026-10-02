@@ -13,6 +13,37 @@ Item {
     readonly property HyprlandMonitor monitor: Hyprland.monitorFor(panelWindow.screen)
     readonly property real dpr: CompositorService.getScreenScale(panelWindow.screen)
     readonly property int workspacesShown: SettingsData.overviewRows * SettingsData.overviewColumns
+    readonly property alias windowMenuWindow: windowMenu.contextWindow
+
+    function openWindowMenu(item, x, y) {
+        const address = item.windowData?.address;
+        if (!address || CompositorService.specialWorkspaceNames.length === 0)
+            return;
+        windowMenu.targetWindow = address;
+        const pos = item.mapToGlobal(x, y);
+        windowMenu.open(panelWindow.screen, pos.x - (panelWindow.screen?.x || 0), pos.y - (panelWindow.screen?.y || 0), false);
+    }
+
+    // scratchpad windows are not in the grid, so the menu only ever offers a move in
+    DankContextMenu {
+        id: windowMenu
+
+        property string targetWindow: ""
+
+        layerNamespace: "dms:overview-window-context-menu"
+        menuItems: CompositorService.specialWorkspaceNames.map(name => ({
+                    type: "item",
+                    icon: "inbox",
+                    text: name === "special" ? I18n.tr("Move to scratchpad") : I18n.tr("Move to scratchpad: %1", "%1 is the named special workspace").arg(name),
+                    action: () => {
+                        CompositorService.moveWindowToSpecial(windowMenu.targetWindow, name);
+                        Qt.callLater(() => {
+                            Hyprland.refreshToplevels();
+                            Hyprland.refreshWorkspaces();
+                        });
+                    }
+                }))
+    }
 
     readonly property var allWorkspaces: Hyprland.workspaces?.values || []
     readonly property var allWorkspaceIds: {
@@ -20,7 +51,7 @@ Item {
         if (!workspaces || workspaces.length === 0)
             return [];
         try {
-            const ids = workspaces.map(ws => ws?.id).filter(id => id !== null && id !== undefined);
+            const ids = workspaces.map(ws => ws?.id).filter(id => id > 0);
             return ids.sort((a, b) => a - b);
         } catch (e) {
             return [];
@@ -34,7 +65,7 @@ Item {
             return [];
         try {
             const filtered = workspaces.filter(ws => ws?.monitor?.name === mon.name);
-            return filtered.map(ws => ws?.id).filter(id => id !== null && id !== undefined).sort((a, b) => a - b);
+            return filtered.map(ws => ws?.id).filter(id => id > 0).sort((a, b) => a - b);
         } catch (e) {
             return [];
         }
@@ -169,6 +200,7 @@ Item {
     property int monitorLabelZ: 2
     property int windowDraggingZ: 99999
     property real workspaceSpacing: 5
+    readonly property int workspaceBorderWidth: 2
 
     property int draggingFromWorkspace: -1
     property int draggingTargetWorkspace: -1
@@ -249,7 +281,7 @@ Item {
         implicitWidth: workspaceGrid.implicitWidth + padding * 2
         implicitHeight: workspaceGrid.implicitHeight + padding * 2
         radius: Theme.cornerRadius
-        color: Theme.surfaceContainer
+        color: Theme.hostSurface
 
         ElevationShadow {
             anchors.fill: parent
@@ -257,7 +289,7 @@ Item {
             level: Theme.elevationLevel2
             fallbackOffset: 4
             targetRadius: Theme.cornerRadius
-            targetColor: Theme.surfaceContainer
+            targetColor: Theme.hostSurface
             shadowOpacity: Theme.elevationLevel2 && Theme.elevationLevel2.alpha !== undefined ? Theme.elevationLevel2.alpha : 0.25
             shadowEnabled: Theme.elevationEnabled
         }
@@ -283,8 +315,8 @@ Item {
                     property bool isActive: workspaceObj?.active ?? false
                     property bool isOnThisMonitor: (workspaceObj && root.monitor) ? (workspaceObj.monitor?.name === root.monitor.name) : true
                     property bool hasWindows: (workspaceValue > 0) ? root.workspaceHasWindows(workspaceValue) : false
-                    property color defaultWorkspaceColor: workspaceExists ? Theme.surfaceContainer : Theme.withAlpha(Theme.surfaceContainer, 0.3)
-                    property color hoveredWorkspaceColor: Qt.lighter(defaultWorkspaceColor, 1.1)
+                    property color defaultWorkspaceColor: workspaceExists ? Theme.cardSurface : Theme.withAlpha(Theme.cardSurface, 0.3)
+                    property color hoveredWorkspaceColor: Theme.hoverTint(defaultWorkspaceColor)
                     property color hoveredBorderColor: Theme.surfaceVariant
                     property bool hoveredWhileDragging: false
                     property bool shouldShowActiveIndicator: isActive && isOnThisMonitor && hasWindows
@@ -297,14 +329,14 @@ Item {
                     height: cell?.height ?? 0
                     color: hoveredWhileDragging ? hoveredWorkspaceColor : defaultWorkspaceColor
                     radius: Theme.cornerRadius
-                    border.width: 2
+                    border.width: root.workspaceBorderWidth
                     border.color: hoveredWhileDragging ? hoveredBorderColor : (shouldShowActiveIndicator ? root.activeBorderColor : Theme.withAlpha(root.activeBorderColor, 0))
 
                     StyledText {
                         anchors.centerIn: parent
                         text: workspace.workspaceValue
                         font.pixelSize: Theme.fontSizeXLarge * 6
-                        font.weight: Font.DemiBold
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.withAlpha(Theme.surfaceText, workspace.workspaceExists ? 0.2 : 0.1)
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -381,20 +413,22 @@ Item {
                     overviewOpen: root.overviewOpen
                     readonly property int windowWorkspaceId: modelData?.workspace?.id ?? -1
                     readonly property var workspaceCell: root.cellForWorkspace(windowWorkspaceId)
-                    readonly property var workspaceBounds: root.getWorkspaceViewportBounds(windowWorkspaceId, workspaceCell.width, workspaceCell.height)
+                    readonly property real contentWidth: workspaceCell.width - root.workspaceBorderWidth * 2
+                    readonly property real contentHeight: workspaceCell.height - root.workspaceBorderWidth * 2
+                    readonly property var workspaceBounds: root.getWorkspaceViewportBounds(windowWorkspaceId, contentWidth, contentHeight)
 
                     toplevel: modelData
                     scale: root.scale
                     monitorDpr: root.dpr
-                    availableWorkspaceWidth: workspaceCell.width
-                    availableWorkspaceHeight: workspaceCell.height
+                    availableWorkspaceWidth: contentWidth
+                    availableWorkspaceHeight: contentHeight
                     contentOriginX: workspaceBounds.x
                     contentOriginY: workspaceBounds.y
                     contentScale: workspaceBounds.scale
                     widgetMonitorId: root.monitor.id
 
-                    xOffset: workspaceCell.x
-                    yOffset: workspaceCell.y
+                    xOffset: workspaceCell.x + root.workspaceBorderWidth
+                    yOffset: workspaceCell.y + root.workspaceBorderWidth
 
                     z: atInitPosition ? root.windowZ : root.windowDraggingZ
                     property bool atInitPosition: (initX == x && initY == y)
@@ -456,6 +490,13 @@ Item {
                             }
                         }
                     }
+
+                    // on top of dragArea so a right press never starts a drag
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        onClicked: mouse => root.openWindowMenu(window, mouse.x, mouse.y)
+                    }
                 }
             }
         }
@@ -489,7 +530,7 @@ Item {
                         width: monitorNameText.contentWidth + Theme.spacingS * 2
                         height: monitorNameText.contentHeight + Theme.spacingXS * 2
                         radius: Theme.cornerRadius
-                        color: Theme.surface
+                        color: Theme.chipSurface
                         visible: labelItem.workspaceExists && labelItem.workspaceMonitorName !== ""
 
                         StyledText {
@@ -497,7 +538,7 @@ Item {
                             anchors.centerIn: parent
                             text: labelItem.workspaceMonitorName
                             font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Medium
+                            font.weight: Theme.fontWeightMedium
                             color: Theme.surfaceText
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter

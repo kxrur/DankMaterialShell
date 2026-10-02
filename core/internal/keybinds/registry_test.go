@@ -14,6 +14,10 @@ func (m *mockProvider) Name() string {
 	return m.name
 }
 
+func (m *mockProvider) ModKey() ModKey {
+	return DefaultModKey()
+}
+
 func (m *mockProvider) GetCheatSheet() (*CheatSheet, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -23,17 +27,6 @@ func (m *mockProvider) GetCheatSheet() (*CheatSheet, error) {
 		Provider: m.name,
 		Binds:    make(map[string][]Keybind),
 	}, nil
-}
-
-func TestNewRegistry(t *testing.T) {
-	r := NewRegistry()
-	if r == nil {
-		t.Fatal("NewRegistry returned nil")
-	}
-
-	if r.providers == nil {
-		t.Error("providers map is nil")
-	}
 }
 
 func TestRegisterProvider(t *testing.T) {

@@ -1,355 +1,166 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modals.DankLauncherV2.Components
 
-Rectangle {
+Item {
     id: root
+
+    LayoutMirroring.enabled: I18n.isRtl
+    LayoutMirroring.childrenInherit: true
 
     property var section: null
     property var controller: null
     property string viewMode: "list"
     property bool canChangeViewMode: true
     property bool canCollapse: true
-    property bool isSticky: false
     property bool popupAbove: false
     property Item popupAboveItem: null
+    property Item focusReturnTarget: null
     property var transientSurfaceTracker: null
+    readonly property bool hasAppCategories: section?.id === "apps" && (controller?.appCategories?.length ?? 0) > 0
+    readonly property var viewModes: [
+        {
+            mode: "list",
+            icon: "view_list",
+            label: I18n.tr("List", "noun, list view mode option")
+        },
+        {
+            mode: "grid",
+            icon: "grid_view",
+            label: I18n.tr("Grid", "noun, grid view mode and layout option")
+        },
+        {
+            mode: "tile",
+            icon: "view_module",
+            label: I18n.tr("Tile")
+        }
+    ]
 
     signal viewModeToggled
 
-    Component.onDestruction: transientSurfaceTracker?.unregister(root)
+    width: parent?.width ?? Theme.fieldDefaultWidth
+    height: LauncherMetrics.sectionHeight
+    clip: true
 
-    Connections {
-        target: root.transientSurfaceTracker
-        ignoreUnknownSignals: true
+    readonly property string categoryLabel: controller?.appCategory || (controller?.appCategories?.[0] ?? "")
 
-        function onCloseRequested() {
-            categoryPopup.close();
-        }
-    }
-
-    width: parent?.width ?? 200
-    height: 32
-    color: isSticky ? Theme.withAlpha(Theme.surfaceHover, 0) : (hoverArea.containsMouse ? Theme.surfaceHover : Theme.withAlpha(Theme.surfaceHover, 0))
-    radius: Theme.cornerRadius
-
-    MouseArea {
-        id: hoverArea
-        anchors.fill: parent
-        hoverEnabled: true
-        acceptedButtons: Qt.NoButton
-    }
-
-    Row {
-        id: leftContent
+    Item {
+        id: labelArea
         anchors.left: parent.left
-        anchors.leftMargin: hasAppCategories ? 0 : Theme.spacingXS
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Theme.spacingS
-
-        readonly property bool hasAppCategories: root.section?.id === "apps" && (root.controller?.appCategories?.length ?? 0) > 0
-
-        DankIcon {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: !leftContent.hasAppCategories
-            name: root.section?.icon ?? "folder"
-            size: 16
-            color: Theme.surfaceVariantText
-        }
-
-        StyledText {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: !leftContent.hasAppCategories
-            text: root.section?.title ?? ""
-            font.pixelSize: Theme.fontSizeSmall
-            font.weight: Font.Medium
-            color: Theme.surfaceVariantText
-        }
-
-        Item {
-            id: categoryChip
-            visible: leftContent.hasAppCategories
-            anchors.verticalCenter: parent.verticalCenter
-            width: chipRow.implicitWidth + Theme.spacingM * 2
-            height: 24
-
-            readonly property string currentCategory: root.controller?.appCategory || (root.controller?.appCategories?.length > 0 ? root.controller.appCategories[0] : "")
-            readonly property var iconMap: {
-                const cats = root.controller?.appCategories ?? [];
-                const m = {};
-                cats.forEach(c => {
-                    m[c] = AppSearchService.getCategoryIcon(c);
-                });
-                return m;
-            }
-
-            Rectangle {
-                anchors.fill: parent
-                radius: Theme.cornerRadius
-                color: chipArea.containsMouse || categoryPopup.visible ? Theme.surfaceContainerHigh : Theme.withAlpha(Theme.surfaceContainerHigh, 0)
-                border.color: categoryPopup.visible ? Theme.primary : Theme.outlineMedium
-                border.width: categoryPopup.visible ? 2 : 1
-            }
-
-            Row {
-                id: chipRow
-                anchors.centerIn: parent
-                spacing: Theme.spacingXS
-
-                DankIcon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: categoryChip.iconMap[categoryChip.currentCategory] ?? "apps"
-                    size: 14
-                    color: Theme.surfaceText
-                }
-
-                StyledText {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: categoryChip.currentCategory
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
-                }
-
-                DankIcon {
-                    anchors.verticalCenter: parent.verticalCenter
-                    name: categoryPopup.visible ? "expand_less" : "expand_more"
-                    size: 14
-                    color: Theme.surfaceVariantText
-                }
-            }
-
-            MouseArea {
-                id: chipArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (categoryPopup.visible) {
-                        categoryPopup.close();
-                    } else {
-                        const chipPos = categoryChip.mapToItem(Overlay.overlay, 0, 0);
-                        const abovePos = (root.popupAboveItem ?? categoryChip).mapToItem(Overlay.overlay, 0, 0);
-                        categoryPopup.x = chipPos.x;
-                        categoryPopup.y = root.popupAbove ? abovePos.y - categoryPopup.height - 4 : chipPos.y + categoryChip.height + 4;
-                        categoryPopup.open();
-                    }
-                }
-            }
-
-            Popup {
-                id: categoryPopup
-                parent: categoryChip.Overlay.overlay
-                width: Math.max(categoryChip.width, 180)
-                padding: 0
-                modal: true
-                dim: false
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-                onVisibleChanged: root.transientSurfaceTracker?.setActive(root, visible, null)
-
-                background: Rectangle {
-                    color: "transparent"
-                }
-
-                contentItem: Rectangle {
-                    radius: Theme.cornerRadius
-                    color: Theme.withAlpha(Theme.surfaceContainer, 1)
-                    border.color: Theme.primary
-                    border.width: 2
-
-                    ElevationShadow {
-                        anchors.fill: parent
-                        z: -1
-                        level: Theme.elevationLevel2
-                        fallbackOffset: 4
-                        targetRadius: parent.radius
-                        targetColor: parent.color
-                        borderColor: parent.border.color
-                        borderWidth: parent.border.width
-                        shadowEnabled: Theme.elevationEnabled && SettingsData.popoutElevationEnabled
-                    }
-
-                    ListView {
-                        id: categoryList
-                        anchors.fill: parent
-                        anchors.margins: Theme.spacingS
-                        model: root.controller?.appCategories ?? []
-                        spacing: Theme.spacingXXS
-                        clip: true
-                        interactive: contentHeight > height
-                        implicitHeight: contentHeight
-
-                        delegate: Rectangle {
-                            id: catDelegate
-                            required property string modelData
-                            required property int index
-                            width: categoryList.width
-                            height: 32
-                            radius: Theme.cornerRadius
-                            readonly property bool isCurrent: categoryChip.currentCategory === modelData
-                            color: isCurrent ? Theme.primaryHover : catArea.containsMouse ? Theme.primaryHoverLight : Theme.withAlpha(Theme.primaryHoverLight, 0)
-
-                            Row {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.leftMargin: Theme.spacingS
-                                anchors.rightMargin: Theme.spacingS
-                                spacing: Theme.spacingS
-
-                                DankIcon {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    name: categoryChip.iconMap[catDelegate.modelData] ?? "apps"
-                                    size: 16
-                                    color: catDelegate.isCurrent ? Theme.primary : Theme.surfaceText
-                                }
-
-                                StyledText {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: catDelegate.modelData
-                                    font.pixelSize: Theme.fontSizeMedium
-                                    color: catDelegate.isCurrent ? Theme.primary : Theme.surfaceText
-                                    font.weight: catDelegate.isCurrent ? Font.Medium : Font.Normal
-                                }
-                            }
-
-                            MouseArea {
-                                id: catArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    if (root.controller)
-                                        root.controller.setAppCategory(catDelegate.modelData);
-                                    categoryPopup.close();
-                                }
-                            }
-                        }
-                    }
-                }
-
-                height: Math.min((root.controller?.appCategories?.length ?? 0) * 34, 10 * 34) + Theme.spacingS * 2 + 4
-            }
-        }
-
-        StyledText {
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.section?.items?.length ?? 0
-            font.pixelSize: Theme.fontSizeSmall
-            color: Theme.outlineButton
-        }
-    }
-
-    Row {
-        id: rightContent
-        anchors.right: parent.right
-        anchors.rightMargin: Theme.spacingXS
-        anchors.verticalCenter: parent.verticalCenter
-        spacing: Theme.spacingS
+        anchors.right: controls.left
+        anchors.leftMargin: LauncherMetrics.headerInset
+        anchors.rightMargin: Theme.spacingS
+        height: parent.height
 
         Row {
-            id: viewModeRow
+            id: labelContent
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Theme.spacingXXS
-            visible: root.canChangeViewMode && !root.section?.collapsed
+            spacing: Theme.spacingS
 
-            Repeater {
-                model: [
-                    {
-                        mode: "list",
-                        icon: "view_list"
-                    },
-                    {
-                        mode: "grid",
-                        icon: "grid_view"
-                    },
-                    {
-                        mode: "tile",
-                        icon: "view_module"
-                    }
-                ]
+            DankIcon {
+                anchors.verticalCenter: parent.verticalCenter
+                name: root.hasAppCategories ? AppSearchService.getCategoryIcon(root.categoryLabel) : (root.section?.icon ?? "folder")
+                size: Theme.iconSizeSmall
+                color: Theme.primary
+            }
 
-                Rectangle {
-                    required property var modelData
-                    required property int index
+            StyledText {
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(implicitWidth, labelArea.width - Theme.iconSizeSmall - Theme.spacingS - (chevron.visible ? chevron.width + Theme.spacingS : 0))
+                text: root.hasAppCategories ? root.categoryLabel : (root.section?.title ?? "")
+                font.pixelSize: Theme.fontSizeSmall
+                font.weight: Theme.fontWeightMedium
+                color: Theme.primary
+                elide: Text.ElideRight
+            }
 
-                    width: 20
-                    height: 20
-                    radius: 4
-                    color: root.viewMode === modelData.mode ? Theme.primaryHover : modeArea.containsMouse ? Theme.surfaceHover : Theme.withAlpha(Theme.surfaceHover, 0)
-
-                    DankIcon {
-                        anchors.centerIn: parent
-                        name: parent.modelData.icon
-                        size: 14
-                        color: root.viewMode === parent.modelData.mode ? Theme.primary : Theme.surfaceVariantText
-                    }
-
-                    MouseArea {
-                        id: modeArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (root.viewMode !== parent.modelData.mode && root.controller && root.section) {
-                                root.controller.setSectionViewMode(root.section.id, parent.modelData.mode);
-                            }
-                        }
-                    }
-                }
+            DankIcon {
+                id: chevron
+                visible: root.hasAppCategories
+                anchors.verticalCenter: parent.verticalCenter
+                name: "arrow_drop_down"
+                size: Theme.iconSizeSmall
+                color: Theme.primary
             }
         }
 
-        Item {
-            id: collapseButton
-            width: root.canCollapse ? 24 : 0
-            height: 24
-            visible: root.canCollapse
-            anchors.verticalCenter: parent.verticalCenter
+        MouseArea {
+            anchors.fill: labelContent
+            enabled: root.hasAppCategories
+            cursorShape: Qt.PointingHandCursor
+            onClicked: categoryDropdown.item?.openDropdownMenu()
+        }
 
-            DankIcon {
-                anchors.centerIn: parent
-                name: root.section?.collapsed ? "expand_more" : "expand_less"
-                size: 16
-                color: collapseArea.containsMouse ? Theme.primary : Theme.surfaceVariantText
-            }
-
-            MouseArea {
-                id: collapseArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (root.controller && root.section) {
-                        root.controller.toggleSection(root.section.id);
-                    }
-                }
+        Loader {
+            id: categoryDropdown
+            active: root.hasAppCategories
+            sourceComponent: DankDropdown {
+                showTrigger: false
+                focusPolicy: Qt.NoFocus
+                popupWidth: Math.min(Theme.fieldDefaultWidth, root.width)
+                compactMode: true
+                options: root.controller?.appCategories ?? []
+                optionIcons: options.map(category => AppSearchService.getCategoryIcon(category))
+                currentValue: root.categoryLabel
+                openUpwards: root.popupAbove
+                popupAnchorItem: root.popupAbove ? root.popupAboveItem : labelContent
+                focusReturnTarget: root.focusReturnTarget
+                transientSurfaceTracker: root.transientSurfaceTracker
+                maxPopupHeight: LauncherMetrics.maxVisibleRows * Theme.menuItemHeight
+                onValueChanged: value => root.controller?.setAppCategory(value)
             }
         }
     }
 
-    MouseArea {
-        anchors.fill: parent
-        anchors.rightMargin: rightContent.width + Theme.spacingS
-        cursorShape: root.canCollapse ? Qt.PointingHandCursor : Qt.ArrowCursor
-        enabled: root.canCollapse && !leftContent.hasAppCategories
-        onClicked: {
-            if (root.canCollapse && root.controller && root.section) {
+    Row {
+        id: controls
+        anchors.right: parent.right
+        anchors.rightMargin: 0
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Theme.groupedListGap
+
+        DankActionButton {
+            readonly property var current: root.viewModes.find(entry => entry.mode === root.viewMode) ?? root.viewModes[0]
+            focusPolicy: Qt.NoFocus
+            visible: root.canChangeViewMode && !root.section?.collapsed
+            iconName: current.icon
+            tooltipText: current.label
+            iconSize: Theme.iconSizeSmall
+            onClicked: {
+                if (!root.controller || !root.section)
+                    return;
+                const index = root.viewModes.indexOf(current);
+                root.controller.setSectionViewMode(root.section.id, root.viewModes[(index + 1) % root.viewModes.length].mode);
+            }
+        }
+
+        DankActionButton {
+            focusPolicy: Qt.NoFocus
+            visible: root.canCollapse
+            iconName: root.section?.collapsed ? "expand_more" : "expand_less"
+            Accessible.name: root.section?.collapsed ? I18n.tr("Expand") : I18n.tr("Collapse")
+            iconSize: Theme.iconSizeSmall
+            onClicked: {
+                if (!root.controller || !root.section)
+                    return;
                 root.controller.toggleSection(root.section.id);
             }
         }
     }
 
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 1
-        color: Theme.outlineMedium
-        visible: root.isSticky
+    MouseArea {
+        anchors.fill: parent
+        anchors.rightMargin: controls.width + Theme.spacingS
+        enabled: root.canCollapse && !root.hasAppCategories
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+            if (!root.controller || !root.section)
+                return;
+            root.controller.toggleSection(root.section.id);
+        }
     }
 }

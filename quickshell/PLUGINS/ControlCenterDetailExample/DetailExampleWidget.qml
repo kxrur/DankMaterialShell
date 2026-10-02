@@ -33,7 +33,7 @@ PluginComponent {
             id: detailRoot
             implicitHeight: detailColumn.implicitHeight + Theme.spacingM * 2
             radius: Theme.cornerRadius
-            color: Theme.surfaceContainerHigh
+            color: Theme.cardSurface
             border.width: 0
             visible: true
 
@@ -50,7 +50,7 @@ PluginComponent {
                     text: "Detail Example Settings"
                     font.pixelSize: Theme.fontSizeLarge
                     color: Theme.surfaceText
-                    font.weight: Font.Medium
+                    font.weight: Theme.fontWeightMedium
                 }
 
                 StyledText {
@@ -66,7 +66,7 @@ PluginComponent {
                         width: parent.width
                         height: 40
                         radius: Theme.cornerRadius
-                        color: optionMouseArea.containsMouse ? Theme.surfaceContainerHighest : Theme.withAlpha(Theme.surfaceContainerHighest, 0)
+                        color: optionMouseArea.containsMouse ? Theme.chipSurface : Theme.withAlpha(Theme.chipSurface, 0)
                         border.color: detailRoot.currentSelection === modelData ? Theme.primary : Theme.withAlpha(Theme.primary, 0)
                         border.width: detailRoot.currentSelection === modelData ? 2 : 0
 
@@ -118,7 +118,7 @@ PluginComponent {
             DankIcon {
                 name: root.isEnabled ? "settings" : "settings_off"
                 color: root.isEnabled ? Theme.primary : Theme.surfaceVariantText
-                font.pixelSize: Theme.iconSize - 4
+                size: root.iconSize
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -128,7 +128,7 @@ PluginComponent {
                     return selected.substring(0, 1);
                 }
                 color: root.isEnabled ? Theme.primary : Theme.surfaceVariantText
-                font.pixelSize: Theme.fontSizeMedium
+                font.pixelSize: root.textSize
                 anchors.verticalCenter: parent.verticalCenter
             }
         }

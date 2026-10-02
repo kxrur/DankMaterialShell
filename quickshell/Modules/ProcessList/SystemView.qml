@@ -7,12 +7,10 @@ import qs.Widgets
 Item {
     id: root
 
-    Component.onCompleted: {
-        DgopService.addRef(["system", "cpu"]);
-    }
-
-    Component.onDestruction: {
-        DgopService.removeRef(["system", "cpu"]);
+    Ref {
+        service: DgopService
+        modules: ["system", "cpu"]
+        active: root.visible
     }
 
     ColumnLayout {
@@ -24,6 +22,8 @@ Item {
             Layout.preferredHeight: systemInfoColumn.implicitHeight + Theme.spacingM * 2
             radius: Theme.cornerRadius
             color: Theme.nestedSurface
+            border.width: Theme.layerOutlineWidth
+            border.color: Theme.outlineMedium
 
             ColumnLayout {
                 id: systemInfoColumn
@@ -44,7 +44,7 @@ Item {
                     StyledText {
                         text: I18n.tr("System Information", "system info header in system monitor")
                         font.pixelSize: Theme.fontSizeLarge
-                        font.weight: Font.Bold
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -97,6 +97,8 @@ Item {
             Layout.fillHeight: true
             radius: Theme.cornerRadius
             color: Theme.nestedSurface
+            border.width: Theme.layerOutlineWidth
+            border.color: Theme.outlineMedium
 
             ColumnLayout {
                 anchors.fill: parent
@@ -116,7 +118,7 @@ Item {
                     StyledText {
                         text: I18n.tr("GPU Monitoring", "gpu section header in system monitor")
                         font.pixelSize: Theme.fontSizeLarge
-                        font.weight: Font.Bold
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -153,7 +155,7 @@ Item {
                                 return Theme.errorHover;
                             if (vendor.includes("intel"))
                                 return Theme.withAlpha(Theme.info, 0.08);
-                            return Theme.surfaceHover;
+                            return Theme.cardSurface;
                         }
                         border.color: {
                             const vendor = (modelData?.vendor ?? "").toLowerCase();
@@ -201,7 +203,7 @@ Item {
                                 StyledText {
                                     text: modelData?.displayName ?? I18n.tr("Unknown GPU", "fallback gpu name")
                                     font.pixelSize: Theme.fontSizeMedium
-                                    font.weight: Font.Bold
+                                    font.weight: Theme.fontWeightMedium
                                     color: Theme.surfaceText
                                 }
 
@@ -277,7 +279,7 @@ Item {
                                         }
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.family: parent.parent.parent.parent.tempEnabled ? SettingsData.monoFontFamily : ""
-                                        font.weight: parent.parent.parent.parent.tempEnabled ? Font.Bold : Font.Normal
+                                        font.weight: parent.parent.parent.parent.tempEnabled ? Theme.fontWeightMedium : Theme.fontWeight
                                         color: {
                                             if (!parent.parent.parent.parent.tempEnabled)
                                                 return Theme.surfaceVariantText;
@@ -347,7 +349,7 @@ Item {
                             }
 
                             StyledText {
-                                text: I18n.tr("No GPUs detected", "empty state in gpu list")
+                                text: I18n.tr("No GPU detected", "empty state in gpu list")
                                 font.pixelSize: Theme.fontSizeMedium
                                 color: Theme.surfaceVariantText
                                 anchors.horizontalCenter: parent.horizontalCenter
@@ -369,7 +371,7 @@ Item {
         StyledText {
             text: label + ":"
             font.pixelSize: Theme.fontSizeSmall
-            font.weight: Font.Medium
+            font.weight: Theme.fontWeightMedium
             color: Theme.surfaceVariantText
             Layout.preferredWidth: 100
         }

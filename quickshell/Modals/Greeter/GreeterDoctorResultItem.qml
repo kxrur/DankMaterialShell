@@ -59,7 +59,7 @@ Rectangle {
             width: parent.width
             text: root.resultData?.name || ""
             font.pixelSize: Theme.fontSizeSmall
-            font.weight: Font.Medium
+            font.weight: Theme.fontWeightMedium
             color: Theme.surfaceText
             elide: Text.ElideRight
         }
@@ -82,7 +82,7 @@ Rectangle {
         height: Math.round(Theme.fontSizeSmall * 1.67)
         width: categoryText.implicitWidth + Theme.spacingS
         radius: Theme.spacingXS
-        color: Theme.surfaceContainerHighest
+        color: Theme.chipSurface
         visible: !!(root.resultData?.category)
 
         StyledText {
@@ -90,6 +90,7 @@ Rectangle {
             anchors.centerIn: parent
             text: root.resultData?.category || ""
             font.pixelSize: Theme.fontSizeSmall - 2
+            font.weight: Theme.fontWeightMedium
             color: Theme.surfaceVariantText
         }
     }

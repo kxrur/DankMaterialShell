@@ -1,11 +1,10 @@
 import QtQuick
-import Quickshell
 import Quickshell.Io
-import Quickshell.Hyprland
 import Quickshell.Wayland
 import Quickshell.Services.SystemTray
 import Quickshell.Services.UPower
 import qs.Common
+import qs.Modules.DankDash
 import qs.Services
 import qs.Modules.Settings.DisplayConfig
 
@@ -36,22 +35,28 @@ Item {
             bars.push(...BarWidgetService.frameBarsForScreen(screenName));
 
         let currentBar = null;
+        let islandBar = null;
         for (const bar of bars) {
             if (!bar)
                 continue;
 
             const onFocusedScreen = focusedScreenName && bar.modelData?.name === focusedScreenName;
             const hasRef = !refPropertyName || !!bar[refPropertyName];
+            if (!hasRef)
+                continue;
 
-            if (hasRef) {
-                currentBar = bar;
-
-                if (onFocusedScreen)
-                    break;
+            if (bar.isIsland) {
+                if (!islandBar || onFocusedScreen)
+                    islandBar = bar;
+                continue;
             }
+
+            currentBar = bar;
+            if (onFocusedScreen)
+                break;
         }
 
-        return currentBar;
+        return currentBar ?? islandBar;
     }
 
     readonly property var defaultAppMimeTypes: ({
@@ -72,10 +77,7 @@ Item {
             return false;
         }
 
-        let entry = DesktopEntries.heuristicLookup(desktopId);
-        if (!entry && desktopId.endsWith(".desktop")) {
-            entry = DesktopEntries.heuristicLookup(desktopId.slice(0, -8));
-        }
+        const entry = SessionService.resolveDesktopId(desktopId);
         if (!entry) {
             log.warn("Default app desktop entry not found:", desktopId, "for:", appName);
             return false;
@@ -248,14 +250,43 @@ Item {
             return "CONTROL_CENTER_OPEN_FAILED";
         }
 
-        function hide(): string {
-            if (PopoutService.closeIslandActivity("controlcenter"))
-                return "CONTROL_CENTER_HIDE_SUCCESS";
-            if (root.controlCenterLoader.item && root.controlCenterLoader.item.shouldBeVisible) {
-                root.controlCenterLoader.item.close();
-                return "CONTROL_CENTER_HIDE_SUCCESS";
+        function openWith(section: string): string {
+            if (PopoutService.routeToIsland("controlcenter", null, false, section))
+                return "CONTROL_CENTER_OPEN_SUCCESS";
+            const popout = root.controlCenterLoader.item;
+            if (popout?.shouldBeVisible) {
+                popout.expandedSection = section;
+                return "CONTROL_CENTER_OPEN_SUCCESS";
             }
-            return "CONTROL_CENTER_HIDE_FAILED";
+            const bar = root.getPreferredBar("controlCenterButtonRef");
+            if (!bar)
+                return "CONTROL_CENTER_OPEN_FAILED";
+            bar.triggerControlCenter();
+            const opened = root.controlCenterLoader.item;
+            if (!opened)
+                return "CONTROL_CENTER_OPEN_SUCCESS";
+            if (opened.shouldBeVisible)
+                opened.expandedSection = section;
+            else
+                opened.pendingSection = section;
+            return "CONTROL_CENTER_OPEN_SUCCESS";
+        }
+
+        function back(): string {
+            const content = root.controlCenterLoader.item?.contentLoader?.item;
+            if (!content)
+                return "CONTROL_CENTER_BACK_FAILED";
+            content.goBack();
+            return "CONTROL_CENTER_BACK_SUCCESS";
+        }
+
+        // The island and the popout can both show the control center, so close and status cover both.
+        function hide(): string {
+            const islandClosed = PopoutService.closeIslandActivity("controlcenter");
+            const popoutOpen = root.controlCenterLoader.item?.shouldBeVisible ?? false;
+            if (popoutOpen)
+                root.controlCenterLoader.item.close();
+            return islandClosed || popoutOpen ? "CONTROL_CENTER_HIDE_SUCCESS" : "CONTROL_CENTER_HIDE_FAILED";
         }
 
         function toggle(): string {
@@ -275,9 +306,8 @@ Item {
         }
 
         function status(): string {
-            if (PopoutService.islandControlCenterOpen)
-                return "visible";
-            return (root.controlCenterLoader.item && root.controlCenterLoader.item.shouldBeVisible) ? "visible" : "hidden";
+            const popoutOpen = root.controlCenterLoader.item?.shouldBeVisible ?? false;
+            return popoutOpen || PopoutService.islandControlCenterOpen ? "visible" : "hidden";
         }
 
         target: "control-center"
@@ -295,124 +325,116 @@ Item {
             return "SCREENSHOT_MODE_OFF";
         }
 
+        function getSurfaces(): string {
+            return JSON.stringify(PopoutManager.getActiveSurfaces());
+        }
+
         target: "screenshot"
     }
 
+    function dashIslandActivity(tabId) {
+        switch (tabId) {
+        case "overview":
+            return "home";
+        case "media":
+        case "wallpaper":
+        case "weather":
+            return tabId;
+        default:
+            return "";
+        }
+    }
+
+    function routeDashToIsland(tabId, toggle) {
+        const activity = dashIslandActivity(tabId);
+        if (activity === "")
+            return false;
+        return PopoutService.routeToIsland(activity, null, toggle);
+    }
+
+    function resolveDashPosition(position) {
+        switch ((position || "").toLowerCase()) {
+        case "left":
+            return "left";
+        case "center":
+            return "center";
+        case "right":
+            return "right";
+        default:
+            return "";
+        }
+    }
+
+    function dashBar(position) {
+        if (position)
+            return root.getPreferredBar();
+        return root.getPreferredBar("clockButtonRef") || root.getPreferredBar();
+    }
+
+    function openDash(tab, position) {
+        const tabId = DashRegistry.resolveId(tab);
+        if (!position && routeDashToIsland(tabId, false))
+            return true;
+
+        const bar = dashBar(position);
+        if (!bar)
+            return false;
+
+        const dash = root.dankDashPopoutLoader.item;
+        if (dash && dash.shouldBeVisible && dash.triggerScreen?.name === bar.screen?.name) {
+            if (position && bar.positionDash)
+                bar.positionDash(dash, position);
+            dash.requestTab(tabId);
+            if (dash.updateSurfacePosition)
+                dash.updateSurfacePosition();
+            return true;
+        }
+
+        return bar.triggerDashTab(tabId, position);
+    }
+
+    function toggleDash(tab, position) {
+        if (root.dankDashPopoutLoader.item?.dashVisible) {
+            root.dankDashPopoutLoader.item.dashVisible = false;
+            return true;
+        }
+
+        const tabId = DashRegistry.resolveId(tab);
+        if (!position && routeDashToIsland(tabId, true))
+            return true;
+
+        const bar = dashBar(position);
+        if (!bar)
+            return false;
+        return bar.triggerDashTab(tabId, position);
+    }
+
     IpcHandler {
-        function _resolveTabId(tab) {
-            switch ((tab || "").toLowerCase()) {
-            case "media":
-                return "media";
-            case "wallpaper":
-                return "wallpaper";
-            case "weather":
-                return "weather";
-            default:
-                return "overview";
-            }
-        }
-
-        function _resolvePosition(position) {
-            switch ((position || "").toLowerCase()) {
-            case "left":
-                return "left";
-            case "center":
-                return "center";
-            case "right":
-                return "right";
-            default:
-                return "";
-            }
-        }
-
-        function _dashBar(position) {
-            if (position)
-                return root.getPreferredBar();
-            return root.getPreferredBar("clockButtonRef") || root.getPreferredBar();
-        }
-
-        function _openDash(tab, position) {
-            const tabId = _resolveTabId(tab);
-            if (!position) {
-                if (tabId === "overview" && PopoutService.routeToIsland("home", null, false))
-                    return true;
-                if (tabId === "media" && PopoutService.routeToIsland("media", null, false))
-                    return true;
-                if (tabId === "wallpaper" && PopoutService.routeToIsland("wallpaper", null, false))
-                    return true;
-                if (tabId === "weather" && PopoutService.routeToIsland("weather", null, false))
-                    return true;
-            }
-
-            const bar = _dashBar(position);
-            if (!bar)
-                return false;
-
-            const dash = root.dankDashPopoutLoader.item;
-            if (dash && dash.shouldBeVisible && dash.triggerScreen?.name === bar.screen?.name) {
-                if (position && bar.positionDash)
-                    bar.positionDash(dash, position);
-                dash.requestTab(tabId);
-                if (dash.updateSurfacePosition)
-                    dash.updateSurfacePosition();
-                return true;
-            }
-
-            return bar.triggerDashTab(tabId, position);
-        }
-
-        function _toggleDash(tab, position) {
-            if (root.dankDashPopoutLoader.item?.dashVisible) {
-                root.dankDashPopoutLoader.item.dashVisible = false;
-                return true;
-            }
-
-            const tabId = _resolveTabId(tab);
-            if (!position) {
-                if (tabId === "overview" && PopoutService.routeToIsland("home", null, true))
-                    return true;
-                if (tabId === "media" && PopoutService.routeToIsland("media", null, true))
-                    return true;
-                if (tabId === "wallpaper" && PopoutService.routeToIsland("wallpaper", null, true))
-                    return true;
-                if (tabId === "weather" && PopoutService.routeToIsland("weather", null, true))
-                    return true;
-            }
-
-            const bar = _dashBar(position);
-            if (!bar)
-                return false;
-            return bar.triggerDashTab(tabId, position);
-        }
-
         function resolveTabIndex(tab: string): int {
-            return SettingsData.dashTabIndexForId(_resolveTabId(tab));
+            return Math.max(0, DashRegistry.indexOf(DashRegistry.resolveId(tab)));
         }
 
         function open(tab: string): string {
-            return _openDash(tab, "") ? "DASH_OPEN_SUCCESS" : "DASH_OPEN_FAILED";
+            return root.openDash(tab, "") ? "DASH_OPEN_SUCCESS" : "DASH_OPEN_FAILED";
         }
 
         function openAt(tab: string, position: string): string {
-            return _openDash(tab, _resolvePosition(position)) ? "DASH_OPEN_SUCCESS" : "DASH_OPEN_FAILED";
+            return root.openDash(tab, root.resolveDashPosition(position)) ? "DASH_OPEN_SUCCESS" : "DASH_OPEN_FAILED";
         }
 
         function close(): string {
-            if (PopoutService.closeIslandActivity("home") || PopoutService.closeIslandActivity("media") || PopoutService.closeIslandActivity("wallpaper") || PopoutService.closeIslandActivity("weather"))
-                return "DASH_CLOSE_SUCCESS";
-            if (root.dankDashPopoutLoader.item) {
+            const islandClosed = SettingsData.islandDashActivities.filter(activity => PopoutService.closeIslandActivity(activity)).length > 0;
+            if (root.dankDashPopoutLoader.item)
                 root.dankDashPopoutLoader.item.dashVisible = false;
-                return "DASH_CLOSE_SUCCESS";
-            }
-            return "DASH_CLOSE_FAILED";
+            return islandClosed || root.dankDashPopoutLoader.item ? "DASH_CLOSE_SUCCESS" : "DASH_CLOSE_FAILED";
         }
 
         function toggle(tab: string): string {
-            return _toggleDash(tab, "") ? "DASH_TOGGLE_SUCCESS" : "DASH_TOGGLE_FAILED";
+            return root.toggleDash(tab, "") ? "DASH_TOGGLE_SUCCESS" : "DASH_TOGGLE_FAILED";
         }
 
         function toggleAt(tab: string, position: string): string {
-            return _toggleDash(tab, _resolvePosition(position)) ? "DASH_TOGGLE_SUCCESS" : "DASH_TOGGLE_FAILED";
+            return root.toggleDash(tab, root.resolveDashPosition(position)) ? "DASH_TOGGLE_SUCCESS" : "DASH_TOGGLE_FAILED";
         }
 
         target: "dash"
@@ -420,20 +442,7 @@ Item {
 
     IpcHandler {
         function getFocusedScreenName() {
-            if (CompositorService.isHyprland && Hyprland.focusedWorkspace && Hyprland.focusedWorkspace.monitor) {
-                return Hyprland.focusedWorkspace.monitor.name;
-            }
-            if (CompositorService.isNiri && NiriService.currentOutput) {
-                return NiriService.currentOutput;
-            }
-            if ((CompositorService.isSway || CompositorService.isScroll || CompositorService.isMiracle) && I3.workspaces?.values) {
-                const focusedWs = I3.workspaces.values.find(ws => ws.focused === true);
-                return focusedWs?.monitor?.name || "";
-            }
-            if (CompositorService.isMango && MangoService.activeOutput) {
-                return MangoService.activeOutput;
-            }
-            return "";
+            return CompositorService.getFocusedScreenName();
         }
 
         function getActiveNotepadInstance() {
@@ -600,21 +609,15 @@ Item {
         }
 
         function play(): void {
-            if (MprisController.activePlayer && MprisController.activePlayer.canPlay) {
-                MprisController.activePlayer.play();
-            }
+            MprisController.play();
         }
 
         function pause(): void {
-            if (MprisController.activePlayer && MprisController.activePlayer.canPause) {
-                MprisController.activePlayer.pause();
-            }
+            MprisController.pause();
         }
 
         function playPause(): void {
-            if (MprisController.activePlayer && MprisController.activePlayer.canTogglePlaying) {
-                MprisController.activePlayer.togglePlaying();
-            }
+            MprisController.playPause();
         }
 
         function previous(): void {
@@ -626,9 +629,7 @@ Item {
         }
 
         function stop(): void {
-            if (MprisController.activePlayer) {
-                MprisController.activePlayer.stop();
-            }
+            MprisController.stop();
         }
 
         function increment(step: string): string {
@@ -844,204 +845,200 @@ Item {
         };
     }
 
+    function withBarConfig(selector: string, value: string, allowIsland: bool, action: var): string {
+        const {
+            barConfig,
+            error
+        } = getBarConfig(selector, value);
+        if (error)
+            return error;
+        if (!allowIsland && SettingsData.isIslandBarConfig(barConfig))
+            return "BAR_IS_ISLAND";
+        return action(barConfig);
+    }
+
     IpcHandler {
         function reveal(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            SettingsData.updateBarConfig(barConfig.id, {
-                visible: true
+            return withBarConfig(selector, value, false, bar => {
+                SettingsData.updateBarConfig(bar.id, {
+                    visible: true
+                });
+                return "BAR_SHOW_SUCCESS";
             });
-            return "BAR_SHOW_SUCCESS";
         }
 
         function hide(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            SettingsData.updateBarConfig(barConfig.id, {
-                visible: false
+            return withBarConfig(selector, value, false, bar => {
+                SettingsData.updateBarConfig(bar.id, {
+                    visible: false
+                });
+                return "BAR_HIDE_SUCCESS";
             });
-            return "BAR_HIDE_SUCCESS";
         }
 
         function toggle(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            SettingsData.updateBarConfig(barConfig.id, {
-                visible: !barConfig.visible
+            return withBarConfig(selector, value, false, bar => {
+                SettingsData.updateBarConfig(bar.id, {
+                    visible: !bar.visible
+                });
+                return !bar.visible ? "BAR_SHOW_SUCCESS" : "BAR_HIDE_SUCCESS";
             });
-            return !barConfig.visible ? "BAR_SHOW_SUCCESS" : "BAR_HIDE_SUCCESS";
         }
 
         function status(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            return barConfig.visible ? "visible" : "hidden";
+            return withBarConfig(selector, value, true, bar => bar.visible ? "visible" : "hidden");
         }
 
         function autoHide(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            SettingsData.updateBarConfig(barConfig.id, {
-                autoHide: true
+            return withBarConfig(selector, value, false, bar => {
+                SettingsData.updateBarConfig(bar.id, {
+                    autoHide: true
+                });
+                return "BAR_AUTO_HIDE_SUCCESS";
             });
-            return "BAR_AUTO_HIDE_SUCCESS";
         }
 
         function manualHide(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            SettingsData.updateBarConfig(barConfig.id, {
-                autoHide: false
+            return withBarConfig(selector, value, false, bar => {
+                SettingsData.updateBarConfig(bar.id, {
+                    autoHide: false
+                });
+                return "BAR_MANUAL_HIDE_SUCCESS";
             });
-            return "BAR_MANUAL_HIDE_SUCCESS";
         }
 
         function toggleAutoHide(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            SettingsData.updateBarConfig(barConfig.id, {
-                autoHide: !barConfig.autoHide
+            return withBarConfig(selector, value, false, bar => {
+                SettingsData.updateBarConfig(bar.id, {
+                    autoHide: !bar.autoHide
+                });
+                return bar.autoHide ? "BAR_MANUAL_HIDE_SUCCESS" : "BAR_AUTO_HIDE_SUCCESS";
             });
-            return barConfig.autoHide ? "BAR_MANUAL_HIDE_SUCCESS" : "BAR_AUTO_HIDE_SUCCESS";
         }
 
         function toggleReveal(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            if (SettingsData.isIslandBarConfig(barConfig))
-                return "BAR_IS_ISLAND";
-            if (!barConfig.autoHide)
-                return "BAR_AUTO_HIDE_DISABLED";
-            if (!(barConfig.visible ?? true)) {
-                SettingsData.updateBarConfig(barConfig.id, {
-                    visible: true
-                });
-                SettingsData.setBarIpcReveal(barConfig.id, true);
-                return "BAR_REVEAL_SUCCESS";
-            }
-            const revealed = SettingsData.toggleBarIpcReveal(barConfig.id);
-            return revealed ? "BAR_REVEAL_SUCCESS" : "BAR_TUCK_SUCCESS";
+            return withBarConfig(selector, value, false, bar => {
+                if (!bar.autoHide)
+                    return "BAR_AUTO_HIDE_DISABLED";
+                if (!(bar.visible ?? true)) {
+                    SettingsData.updateBarConfig(bar.id, {
+                        visible: true
+                    });
+                    SettingsData.setBarIpcReveal(bar.id, true);
+                    return "BAR_REVEAL_SUCCESS";
+                }
+                const revealed = SettingsData.toggleBarIpcReveal(bar.id);
+                return revealed ? "BAR_REVEAL_SUCCESS" : "BAR_TUCK_SUCCESS";
+            });
         }
 
         function getPosition(selector: string, value: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            const positions = ["top", "bottom", "left", "right"];
-            return positions[barConfig.position] || "unknown";
+            return withBarConfig(selector, value, true, bar => ["top", "bottom", "left", "right"][bar.position] || "unknown");
         }
 
         function setPosition(selector: string, value: string, position: string): string {
-            const {
-                barConfig,
-                error
-            } = getBarConfig(selector, value);
-            if (error)
-                return error;
-            const positionMap = {
-                "top": SettingsData.Position.Top,
-                "bottom": SettingsData.Position.Bottom,
-                "left": SettingsData.Position.Left,
-                "right": SettingsData.Position.Right
-            };
-            const posValue = positionMap[position.toLowerCase()];
-            if (posValue === undefined)
-                return "BAR_INVALID_POSITION";
-            SettingsData.updateBarConfig(barConfig.id, {
-                position: posValue
+            return withBarConfig(selector, value, true, bar => {
+                const positionMap = {
+                    "top": SettingsData.Position.Top,
+                    "bottom": SettingsData.Position.Bottom,
+                    "left": SettingsData.Position.Left,
+                    "right": SettingsData.Position.Right
+                };
+                const posValue = positionMap[position.toLowerCase()];
+                if (posValue === undefined)
+                    return "BAR_INVALID_POSITION";
+                SettingsData.updateBarConfig(bar.id, {
+                    position: posValue
+                });
+                return "BAR_POSITION_SET_SUCCESS";
             });
-            return "BAR_POSITION_SET_SUCCESS";
         }
 
         target: "bar"
     }
 
+    // Outside the handler so it stays a helper rather than a callable dock command.
+    function dockConfigFor(selector: string): var {
+        return SettingsData.dockConfigForAction(BarWidgetService.getFocusedScreenName(), selector);
+    }
+
     IpcHandler {
+        target: "dock"
+
         function reveal(): string {
-            SettingsData.setShowDock(true);
+            return revealFor("");
+        }
+        function hide(): string {
+            return hideFor("");
+        }
+        function toggle(): string {
+            return toggleFor("");
+        }
+        function status(): string {
+            return statusFor("");
+        }
+        function revealFor(selector: string): string {
+            const config = root.dockConfigFor(selector);
+            if (!config)
+                return "DOCK_NOT_FOUND";
+            SettingsData.updateDockConfig(config.id, {
+                enabled: true
+            });
             return "DOCK_SHOW_SUCCESS";
         }
-
-        function hide(): string {
-            SettingsData.setShowDock(false);
+        function hideFor(selector: string): string {
+            const config = root.dockConfigFor(selector);
+            if (!config)
+                return "DOCK_NOT_FOUND";
+            SettingsData.updateDockConfig(config.id, {
+                enabled: false
+            });
             return "DOCK_HIDE_SUCCESS";
         }
-
-        function toggle(): string {
-            SettingsData.toggleShowDock();
-            return SettingsData.showDock ? "DOCK_SHOW_SUCCESS" : "DOCK_HIDE_SUCCESS";
+        function toggleFor(selector: string): string {
+            const config = root.dockConfigFor(selector);
+            if (!config)
+                return "DOCK_NOT_FOUND";
+            return config.enabled ? hideFor(config.id) : revealFor(config.id);
         }
-
-        function status(): string {
-            return SettingsData.showDock ? "visible" : "hidden";
+        function statusFor(selector: string): string {
+            const config = root.dockConfigFor(selector);
+            return config ? (config.enabled ? "visible" : "hidden") : "DOCK_NOT_FOUND";
         }
-
+        function edit(): string {
+            return editFor("");
+        }
+        function editFor(selector: string): string {
+            const config = root.dockConfigFor(selector);
+            if (!config)
+                return "DOCK_NOT_FOUND";
+            if (!config.enabled)
+                return "DOCK_HIDDEN";
+            BarWidgetService.dockEditRequested(config.id);
+            return "DOCK_EDIT_SUCCESS";
+        }
         function autoHide(): string {
-            SettingsData.dockAutoHide = true;
-            SettingsData.saveSettings();
-            return "BAR_AUTO_HIDE_SUCCESS";
+            return autoHideFor("", true);
         }
-
         function manualHide(): string {
-            SettingsData.dockAutoHide = false;
-            SettingsData.saveSettings();
-            return "BAR_MANUAL_HIDE_SUCCESS";
+            return autoHideFor("", false);
         }
-
         function toggleAutoHide(): string {
-            SettingsData.dockAutoHide = !SettingsData.dockAutoHide;
-            SettingsData.saveSettings();
-            return SettingsData.dockAutoHide ? "BAR_AUTO_HIDE_SUCCESS" : "BAR_MANUAL_HIDE_SUCCESS";
+            const config = root.dockConfigFor("");
+            if (!config)
+                return "DOCK_NOT_FOUND";
+            return autoHideFor(config.id, !config.autoHide);
         }
-
-        target: "dock"
+        function autoHideFor(selector: string, enabled: bool): string {
+            const config = root.dockConfigFor(selector);
+            if (!config)
+                return "DOCK_NOT_FOUND";
+            SettingsData.updateDockConfig(config.id, {
+                autoHide: enabled,
+                smartAutoHide: false
+            });
+            return enabled ? "BAR_AUTO_HIDE_SUCCESS" : "BAR_MANUAL_HIDE_SUCCESS";
+        }
     }
 
     IpcHandler {
@@ -1053,6 +1050,8 @@ Item {
         function openWith(tab: string): string {
             if (!tab)
                 return "SETTINGS_OPEN_FAILED: No tab specified";
+            if (!SettingsTabs.resolvePage(tab))
+                return `SETTINGS_OPEN_FAILED: Unknown tab ${tab}`;
             PopoutService.openSettingsWithTab(tab);
             return `SETTINGS_OPEN_SUCCESS: ${tab}`;
         }
@@ -1070,6 +1069,8 @@ Item {
         function toggleWith(tab: string): string {
             if (!tab)
                 return "SETTINGS_TOGGLE_FAILED: No tab specified";
+            if (!SettingsTabs.resolvePage(tab))
+                return `SETTINGS_TOGGLE_FAILED: Unknown tab ${tab}`;
             PopoutService.toggleSettingsWithTab(tab);
             return `SETTINGS_TOGGLE_SUCCESS: ${tab}`;
         }
@@ -1082,27 +1083,14 @@ Item {
         function focusOrToggleWith(tab: string): string {
             if (!tab)
                 return "SETTINGS_FOCUS_OR_TOGGLE_FAILED: No tab specified";
+            if (!SettingsTabs.resolvePage(tab))
+                return `SETTINGS_FOCUS_OR_TOGGLE_FAILED: Unknown tab ${tab}`;
             PopoutService.focusOrToggleSettingsWithTab(tab);
             return `SETTINGS_FOCUS_OR_TOGGLE_SUCCESS: ${tab}`;
         }
 
         function tabs(): string {
-            var ids = [];
-            var structure = SettingsTabs.structure;
-            for (var i = 0; i < structure.length; i++) {
-                var cat = structure[i];
-                if (cat.separator)
-                    continue;
-                if (cat.id)
-                    ids.push(cat.id);
-                if (cat.children) {
-                    for (var j = 0; j < cat.children.length; j++) {
-                        if (cat.children[j].id)
-                            ids.push(cat.children[j].id);
-                    }
-                }
-            }
-            return ids.join("\n");
+            return SettingsTabs.listPageIds().join("\n");
         }
 
         function get(key: string): string {
@@ -1187,7 +1175,7 @@ Item {
             if (!widgetId)
                 return "ERROR: No widget ID specified";
 
-            if (!BarWidgetService.hasWidget(widgetId))
+            if (!BarWidgetService.ensureWidget(widgetId))
                 return `WIDGET_NOT_FOUND: ${widgetId}`;
 
             const success = BarWidgetService.triggerWidgetPopout(widgetId);
@@ -1197,7 +1185,7 @@ Item {
         function openWith(widgetId: string, mode: string): string {
             if (!widgetId)
                 return "ERROR: No widget ID specified";
-            if (!BarWidgetService.hasWidget(widgetId))
+            if (!BarWidgetService.ensureWidget(widgetId))
                 return `WIDGET_NOT_FOUND: ${widgetId}`;
 
             const widget = BarWidgetService.getWidgetOnFocusedScreen(widgetId);
@@ -1213,7 +1201,7 @@ Item {
         function toggleWith(widgetId: string, mode: string): string {
             if (!widgetId)
                 return "ERROR: No widget ID specified";
-            if (!BarWidgetService.hasWidget(widgetId))
+            if (!BarWidgetService.ensureWidget(widgetId))
                 return `WIDGET_NOT_FOUND: ${widgetId}`;
 
             const widget = BarWidgetService.getWidgetOnFocusedScreen(widgetId);
@@ -1229,7 +1217,7 @@ Item {
         function openQuery(widgetId: string, query: string): string {
             if (!widgetId)
                 return "ERROR: No widget ID specified";
-            if (!BarWidgetService.hasWidget(widgetId))
+            if (!BarWidgetService.ensureWidget(widgetId))
                 return `WIDGET_NOT_FOUND: ${widgetId}`;
 
             const widget = BarWidgetService.getWidgetOnFocusedScreen(widgetId);
@@ -1245,7 +1233,7 @@ Item {
         function toggleQuery(widgetId: string, query: string): string {
             if (!widgetId)
                 return "ERROR: No widget ID specified";
-            if (!BarWidgetService.hasWidget(widgetId))
+            if (!BarWidgetService.ensureWidget(widgetId))
                 return `WIDGET_NOT_FOUND: ${widgetId}`;
 
             const widget = BarWidgetService.getWidgetOnFocusedScreen(widgetId);
@@ -1482,7 +1470,7 @@ Item {
             if (!PopoutService.clipboardHistoryModal) {
                 return "CLIPBOARD_NOT_AVAILABLE";
             }
-            PopoutService.clipboardHistoryModal.show();
+            PopoutService.openClipboardHistory();
             return "CLIPBOARD_OPEN_SUCCESS";
         }
 
@@ -1490,7 +1478,7 @@ Item {
             if (!PopoutService.clipboardHistoryModal) {
                 return "CLIPBOARD_NOT_AVAILABLE";
             }
-            PopoutService.clipboardHistoryModal.hide();
+            PopoutService.closeClipboardHistory();
             return "CLIPBOARD_CLOSE_SUCCESS";
         }
 
@@ -1498,7 +1486,7 @@ Item {
             if (!PopoutService.clipboardHistoryModal) {
                 return "CLIPBOARD_NOT_AVAILABLE";
             }
-            PopoutService.clipboardHistoryModal.toggle();
+            PopoutService.toggleClipboardHistory();
             return "CLIPBOARD_TOGGLE_SUCCESS";
         }
 
@@ -1927,6 +1915,39 @@ Item {
         }
 
         target: "workspace-rename"
+    }
+
+    IpcHandler {
+        function toggle(name: string): string {
+            if (!CompositorService.isHyprland)
+                return "SCRATCHPAD_UNSUPPORTED_COMPOSITOR";
+            CompositorService.toggleSpecialWorkspace(name);
+            return "SCRATCHPAD_TOGGLED";
+        }
+
+        function move(name: string): string {
+            if (!CompositorService.isHyprland)
+                return "SCRATCHPAD_UNSUPPORTED_COMPOSITOR";
+            const active = ToplevelManager.activeToplevel;
+            if (!active)
+                return "SCRATCHPAD_NO_FOCUSED_WINDOW";
+            CompositorService.moveWindowToSpecial(active, name || "special");
+            return "SCRATCHPAD_MOVED";
+        }
+
+        function restore(): string {
+            if (!CompositorService.isHyprland)
+                return "SCRATCHPAD_UNSUPPORTED_COMPOSITOR";
+            const active = ToplevelManager.activeToplevel;
+            if (!active)
+                return "SCRATCHPAD_NO_FOCUSED_WINDOW";
+            if (!CompositorService.windowScratchpadName(active))
+                return "SCRATCHPAD_WINDOW_NOT_IN_SCRATCHPAD";
+            CompositorService.moveWindowOutOfSpecial(active);
+            return "SCRATCHPAD_RESTORED";
+        }
+
+        target: "scratchpad"
     }
 
     IpcHandler {

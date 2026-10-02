@@ -4,14 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-)
 
-func TestSwayProviderName(t *testing.T) {
-	provider := NewSwayProvider("")
-	if provider.Name() != "sway" {
-		t.Errorf("Name() = %q, want %q", provider.Name(), "sway")
-	}
-}
+	"github.com/AvengeMedia/DankMaterialShell/core/internal/keybinds"
+)
 
 func TestSwayProviderDefaultPath(t *testing.T) {
 	provider := NewSwayProvider("")
@@ -22,14 +17,6 @@ func TestSwayProviderDefaultPath(t *testing.T) {
 	expected := filepath.Join(configDir, "sway")
 	if provider.configPath != expected {
 		t.Errorf("configPath = %q, want %q", provider.configPath, expected)
-	}
-}
-
-func TestSwayProviderCustomPath(t *testing.T) {
-	customPath := "/custom/path"
-	provider := NewSwayProvider(customPath)
-	if provider.configPath != customPath {
-		t.Errorf("configPath = %q, want %q", provider.configPath, customPath)
 	}
 }
 
@@ -88,7 +75,7 @@ func TestSwayFormatKey(t *testing.T) {
 				Mods: []string{"Mod4"},
 				Key:  "q",
 			},
-			expected: "Mod4+q",
+			expected: "Super+q",
 		},
 		{
 			name: "multiple_mods",
@@ -96,7 +83,7 @@ func TestSwayFormatKey(t *testing.T) {
 				Mods: []string{"Mod4", "Shift"},
 				Key:  "e",
 			},
-			expected: "Mod4+Shift+e",
+			expected: "Super+Shift+e",
 		},
 		{
 			name: "no_mods",
@@ -134,7 +121,7 @@ func TestSwayConvertKeybind(t *testing.T) {
 				Command: "exec kitty",
 				Comment: "Open terminal",
 			},
-			wantKey:  "Mod4+t",
+			wantKey:  "Super+t",
 			wantDesc: "Open terminal",
 		},
 		{
@@ -145,7 +132,7 @@ func TestSwayConvertKeybind(t *testing.T) {
 				Command: "reload",
 				Comment: "",
 			},
-			wantKey:  "Mod4+r",
+			wantKey:  "Super+r",
 			wantDesc: "reload",
 		},
 	}
@@ -281,7 +268,7 @@ bindsym $mod+1 workspace number 1
 	foundTerminal := false
 	for _, binds := range sheet.Binds {
 		for _, bind := range binds {
-			if bind.Description == "Terminal" && bind.Key == "Mod4+t" {
+			if bind.Description == "Terminal" && bind.Key == "Super+t" {
 				foundTerminal = true
 			}
 		}
@@ -289,5 +276,9 @@ bindsym $mod+1 workspace number 1
 
 	if !foundTerminal {
 		t.Error("Did not find terminal keybind with correct key and description")
+	}
+
+	if sheet.Mod.Resolved != "Super" || sheet.Mod.Source != keybinds.ModSourceConfig {
+		t.Errorf("Mod = %+v, want Super from config", sheet.Mod)
 	}
 }

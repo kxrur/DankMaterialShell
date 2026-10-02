@@ -1,7 +1,9 @@
 import QtQuick
 import Quickshell
 import qs.Common
+import qs.Modules.DankIsland
 import qs.Services
+import qs.Widgets
 
 Item {
     id: barWindow
@@ -20,107 +22,155 @@ Item {
 
     readonly property bool barRevealed: inputMask.showing
 
+    readonly property bool isIsland: barConfig?.island === true
+    // Resolver-owned so the body, the frame and the dismiss window agree during the frame latch.
+    readonly property var layoutInstance: ShellLayout.forConfig(screen, _barId)
+    readonly property bool hostsIsland: isIsland || (layoutInstance?.hostsIsland ?? false)
+    readonly property string islandChromeMode: isIsland ? "own" : usesConnectedFrameChrome && frameHosted ? "none" : "band"
+    readonly property bool frameHosted: layoutInstance?.kind === "frame"
+    property real hostOffsetX: 0
+    property real hostOffsetY: 0
+    // A free island's pill lives in IslandFreeHostWindow; this window only carries its satellites.
+    readonly property bool islandFree: isIsland && SettingsData.islandFreePlacement(barConfig)
+    readonly property var islandHost: islandLoader.item
+    readonly property real islandStripThickness: isIsland ? SettingsData.islandStripThickness(barConfig) : 0
+    readonly property string islandSatellitePosition: isIsland ? SettingsData.islandSetting(barConfig, "islandSatellitePosition") : "edges"
+    readonly property bool islandSatellitesEnabled: !isIsland || SettingsData.islandSetting(barConfig, "islandSatellitesEnabled")
+    readonly property bool islandSatellitesHugIsland: isIsland && islandSatellitePosition === "island"
+    readonly property real islandSatelliteGap: isIsland ? SettingsData.islandSetting(barConfig, "islandSatelliteGap") : 0
+    readonly property bool islandSatelliteBackground: isIsland && SettingsData.islandSetting(barConfig, "islandSatelliteBackground")
+    readonly property color islandSurfaceColor: {
+        if (islandHost)
+            return islandHost.surfaceColor;
+        if (!isIsland)
+            return Theme.hostSurface;
+        if (SettingsData.islandSetting(barConfig, "islandHighContrast"))
+            return Theme.surfaceContainerHighest;
+        const palette = SettingsData.islandSetting(barConfig, "islandPalette");
+        return palette === "bright" ? Theme.surfaceBright : palette === "dim" ? Theme.surfaceDim : _hostSurface;
+    }
+    readonly property real islandSatelliteOpacity: isIsland ? SettingsData.islandSatelliteTransparency(barConfig) : 1
+    readonly property real islandChromePad: isIsland ? Theme.snap((barConfig?.innerPadding ?? 4) + Theme.spacingXS, _dpr) : 0
+    readonly property real islandChromeInset: islandSatelliteBackground ? islandChromePad : 0
+    readonly property bool islandMotionRunning: islandHost?.motionRunning ?? false
+    onIslandMotionRunningChanged: {
+        if (islandMotionRunning)
+            return;
+        _blurRebuildTimer.restart();
+        topBarContent.invalidateHoverCandidateCache();
+    }
+    readonly property bool islandBandInteractive: isIsland && !!islandHost && !islandHost.inputSuspended && ((islandHost.scrollEnabled && !islandHost.floating) || islandHost.satelliteSurfacesOpen)
+    readonly property real islandAlongStart: islandSatellitesHugIsland && islandHost ? Math.round(islandHost.currentAlongPos) : 0
+    readonly property real islandAlongEnd: islandSatellitesHugIsland && islandHost ? Math.round(islandHost.currentAlongPos + islandHost.currentVisualAlong) : 0
+    readonly property real islandFrozenStart: !islandHost ? 0 : Math.min(isVertical ? islandHost.motionStartBounds.y : islandHost.motionStartBounds.x, islandHost.targetAlongPos)
+    readonly property real islandFrozenEnd: !islandHost ? 0 : Math.max((isVertical ? islandHost.motionStartBounds.y + islandHost.motionStartBounds.height : islandHost.motionStartBounds.x + islandHost.motionStartBounds.width), islandHost.targetAlongPos + islandHost.targetVisualAlong)
+    readonly property real islandLeadingSpread: islandMotionRunning ? Math.max(0, islandAlongStart - islandFrozenStart) : 0
+    readonly property real islandTrailingSpread: islandMotionRunning ? Math.max(0, islandFrozenEnd - islandAlongEnd) : 0
+    // The island's visual span inside the band, for the fork's strip right-click areas.
+    readonly property point islandVisualOrigin: islandHost && islandHost.surface ? barUnitInset.mapFromItem(islandHost.surface, islandHost.currentVisualX, islandHost.currentVisualY) : Qt.point(0, 0)
+    readonly property real islandVisualAlongStart: isVertical ? islandVisualOrigin.y : islandVisualOrigin.x
+    readonly property real islandVisualAlongEnd: islandVisualAlongStart + (islandHost ? (isVertical ? islandHost.currentVisualHeight : islandHost.currentVisualWidth) : 0)
+    readonly property bool islandStripAreasActive: isIsland && !!islandHost && !islandHost.inputSuspended && !islandHost.satelliteSurfacesOpen
+    readonly property real contentAlongStart: (isVertical ? barUnitInset.y + topBarContent.anchors.topMargin : barUnitInset.x + topBarContent.anchors.leftMargin)
+    readonly property real contentAlongEnd: (isVertical ? barUnitInset.y + barUnitInset.height - topBarContent.anchors.bottomMargin : barUnitInset.x + barUnitInset.width - topBarContent.anchors.rightMargin)
+    readonly property real leadingSectionSize: _leftSection ? (isVertical ? _leftSection.implicitHeight : _leftSection.implicitWidth) : 0
+    readonly property real trailingSectionSize: _rightSection ? (isVertical ? _rightSection.implicitHeight : _rightSection.implicitWidth) : 0
+    readonly property real freeSatelliteSeparation: leadingSectionSize > 0 && trailingSectionSize > 0 ? islandSatelliteGap + islandChromeInset * 2 : 0
+    readonly property real freeSatelliteStart: ((isVertical ? height : width) - leadingSectionSize - freeSatelliteSeparation - trailingSectionSize) / 2
+    readonly property real islandLeadingOffset: !islandSatellitesHugIsland ? 0 : Math.max(0, islandFree ? freeSatelliteStart - contentAlongStart : islandAlongStart - islandSatelliteGap - islandChromeInset - leadingSectionSize - contentAlongStart)
+    readonly property real islandTrailingOffset: !islandSatellitesHugIsland ? 0 : Math.max(0, contentAlongEnd - (islandFree ? freeSatelliteStart + leadingSectionSize + freeSatelliteSeparation + trailingSectionSize : islandAlongEnd + islandSatelliteGap + islandChromeInset + trailingSectionSize))
+    // The band moves inside the window when a far-edge bar grows for the sheet; mapToItem alone would not notice.
+    readonly property real _bandOrigin: topBarMouseArea.x + topBarMouseArea.y
+    // Section rects feed the input masks and the dismiss-window holes; nothing reads them while neither is live.
+    readonly property bool sectionRectsLive: clickThroughEnabled || islandSheetOut || (isIsland && !(islandHost?.inputSuspended ?? false))
+    readonly property var leadingSectionRect: sectionRectsLive ? sectionRect(_leftSection, false, _revealProgress + islandLeadingOffset + islandTrailingOffset + _bandOrigin) : null
+    readonly property var trailingSectionRect: sectionRectsLive ? sectionRect(_rightSection, false, _revealProgress + islandLeadingOffset + islandTrailingOffset + _bandOrigin) : null
+    readonly property var centerSectionRect: sectionRectsLive ? sectionRect(_centerSection, true, _revealProgress + _bandOrigin) : null
+    property Item islandSlot: null
+    readonly property bool configVisible: barConfig?.visible ?? true
+    onConfigVisibleChanged: {
+        if (!configVisible)
+            islandHost?.islandController.requestCollapse();
+    }
+
+    function processScrollWheel(wheel) {
+        scrollArea.processWheel(wheel);
+    }
+
     property var controlCenterButtonRef: null
     property var clockButtonRef: null
     property var systemUpdateButtonRef: null
 
+    function revealWidgetItem(item) {
+        topBarCore.revealSticky = true;
+        topBarCore.evaluateReveal();
+    }
+
+    function widgetForType(widgetId) {
+        return BarWidgetService.resolveWidget(widgetId, {
+            screenName: screen?.name,
+            barId: barConfig?.id,
+            kind: "bar"
+        })?.item ?? null;
+    }
+
     function triggerSystemUpdate() {
+        if (BarWidgetService.triggerWidgetPopout("systemUpdate", {
+            screenName: screen?.name,
+            barId: barConfig?.id,
+            kind: "bar"
+        }))
+            return;
         const loader = PopoutService.systemUpdateLoader;
         if (!loader)
             return;
         loader.active = true;
         if (!loader.item)
             return;
-        const popout = loader.item;
-        const barPosition = axis?.edge === "left" ? 2 : (axis?.edge === "right" ? 3 : (axis?.edge === "top" ? 0 : 1));
-        if (systemUpdateButtonRef && popout.setTriggerPosition) {
-            const screenPos = systemUpdateButtonRef.mapToItem(null, 0, 0);
-            const pos = SettingsData.getPopupTriggerPosition(screenPos, barWindow.screen, barWindow.effectiveBarThickness, systemUpdateButtonRef.width, barConfig?.spacing ?? 4, barPosition, barConfig);
-            const section = systemUpdateButtonRef.section || "right";
-            popout.setTriggerPosition(pos.x, pos.y, pos.width, section, barWindow.screen, barPosition, barWindow.effectiveBarThickness, barConfig?.spacing ?? 4, barConfig);
-        } else {
-            popout.screen = barWindow.screen;
-        }
-        PopoutManager.requestPopout(popout, undefined, "systemUpdate");
+        loader.item.screen = screen;
+        PopoutManager.requestPopout(loader.item, undefined, "systemUpdate");
     }
 
     function triggerControlCenter() {
+        if (BarWidgetService.triggerWidgetPopout("controlCenterButton", {
+            screenName: screen?.name,
+            barId: barConfig?.id,
+            kind: "bar"
+        }))
+            return;
         const loader = PopoutService.controlCenterLoader;
         if (!loader)
             return;
         loader.active = true;
-        if (!loader.item) {
+        if (!loader.item)
             return;
-        }
-
-        if (controlCenterButtonRef && loader.item.setTriggerPosition) {
-            const screenPos = controlCenterButtonRef.mapToItem(null, 0, 0);
-            const barPosition = axis?.edge === "left" ? 2 : (axis?.edge === "right" ? 3 : (axis?.edge === "top" ? 0 : 1));
-            const pos = SettingsData.getPopupTriggerPosition(screenPos, barWindow.screen, barWindow.effectiveBarThickness, controlCenterButtonRef.width, barConfig?.spacing ?? 4, barPosition, barConfig);
-            const section = controlCenterButtonRef.section || "right";
-            loader.item.setTriggerPosition(pos.x, pos.y, pos.width, section, barWindow.screen, barPosition, barWindow.effectiveBarThickness, barConfig?.spacing ?? 4, barConfig);
-        } else {
-            loader.item.triggerScreen = barWindow.screen;
-        }
-
+        loader.item.triggerScreen = screen;
         loader.item.toggle();
-        if (loader.item.shouldBeVisible && NetworkService.wifiEnabled) {
+        if (loader.item.shouldBeVisible && NetworkService.wifiEnabled)
             NetworkService.scanWifi();
-        }
     }
 
-    function dashSectionAnchor(section) {
-        let item;
+    function dashSectionItem(section) {
+        const vertical = barWindow.isVertical;
         switch (section) {
         case "left":
-            item = barWindow.isVertical ? topBarContent.vLeftSection : topBarContent.hLeftSection;
-            break;
+            return vertical ? topBarContent.vLeftSection : topBarContent.hLeftSection;
         case "right":
-            item = barWindow.isVertical ? topBarContent.vRightSection : topBarContent.hRightSection;
-            break;
+            return vertical ? topBarContent.vRightSection : topBarContent.hRightSection;
         default:
-            item = barWindow.isVertical ? topBarContent.vCenterSection : topBarContent.hCenterSection;
+            return vertical ? topBarContent.vCenterSection : topBarContent.hCenterSection;
         }
-        if (!item)
-            return null;
-        if (barWindow.isVertical)
-            return {
-                "pos": item.mapToItem(null, 0, item.height / 2),
-                "width": item.height
-            };
-        return {
-            "pos": item.mapToItem(null, 0, 0),
-            "width": item.width
-        };
     }
 
     function positionDash(popout, position) {
-        if (!popout.setTriggerPosition) {
-            popout.triggerScreen = barWindow.screen;
-            return "center";
-        }
-
+        const clock = widgetForType("clock");
         const explicit = position === "left" || position === "center" || position === "right";
-        const section = explicit ? position : (clockButtonRef?.section || "center");
-        const clockAnchor = clockButtonRef?.visualContent ? {
-            "pos": clockButtonRef.visualContent.mapToItem(null, 0, 0),
-            "width": clockButtonRef.visualWidth
-        } : null;
-
-        let anchor;
-        if (!explicit && section !== "center" && clockAnchor)
-            anchor = clockAnchor;
-        else
-            anchor = dashSectionAnchor(section) || clockAnchor;
-
-        if (!anchor) {
+        const section = explicit ? position : (clock?.section || "center");
+        const sectionItem = dashSectionItem(section);
+        const anchorClock = clock && (!explicit && (section !== "center" || (hostsIsland && SettingsData.islandWidgetSection(barConfig) === "center")) || !sectionItem);
+        const item = anchorClock ? clock : sectionItem;
+        if (!item || !topBarContent.surfaceContext.positionPopout(popout, item, section, anchorClock ? undefined : sectionItem))
             popout.triggerScreen = barWindow.screen;
-            return section;
-        }
-
-        const barPosition = axis?.edge === "left" ? 2 : (axis?.edge === "right" ? 3 : (axis?.edge === "top" ? 0 : 1));
-        const pos = SettingsData.getPopupTriggerPosition(anchor.pos, barWindow.screen, barWindow.effectiveBarThickness, anchor.width, barConfig?.spacing ?? 4, barPosition, barConfig);
-        popout.setTriggerPosition(pos.x, pos.y, pos.width, section, barWindow.screen, barPosition, barWindow.effectiveBarThickness, barConfig?.spacing ?? 4, barConfig);
         return section;
     }
 
@@ -133,6 +183,7 @@ Item {
             return false;
         }
 
+        revealWidgetItem(null);
         const section = positionDash(loader.item, position);
         if (loader.item.requestTab)
             loader.item.requestTab(tabId);
@@ -176,19 +227,10 @@ Item {
         onTriggered: barBlur.rebuild()
     }
 
-    Connections {
-        target: barWindow
-        function onUsesConnectedFrameChromeChanged() {
-            _blurRebuildTimer.restart();
-        }
-        function onUsesFrameBarChromeChanged() {
-            // Rebuild immediately so the bar region never overlaps FrameWindow's during chrome handoff
-            barBlur.rebuild();
-        }
-        function onBarRevealedChanged() {
-            barBlur.rebuild();
-        }
-    }
+    onUsesConnectedFrameChromeChanged: _blurRebuildTimer.restart()
+    // Rebuild immediately so the bar region never overlaps FrameWindow's during chrome handoff
+    onUsesFrameBarChromeChanged: barBlur.rebuild()
+    onBarRevealedChanged: barBlur.rebuild()
 
     Component {
         id: blurRegionComp
@@ -200,72 +242,102 @@ Item {
         Region {
             property Item w
             item: w
-            radius: Theme.cornerRadius
+            radius: w?.blurRadius ?? Theme.cornerRadius
         }
     }
 
     Component {
         id: blurWingRegionComp
 
-        // r×r square at a bar end minus a quarter-disc — the swoop BarCanvas paints
         Region {
             id: wingRegion
 
-            property bool atEnd: false
+            property Item wing
 
-            readonly property real r: barBackground.wing
-            readonly property real bx: topBarMouseArea.x + barUnitInset.x + topBarSlide.x
-            readonly property real by: topBarMouseArea.y + barUnitInset.y + topBarSlide.y
-            readonly property real bw: barUnitInset.width
-            readonly property real bh: barUnitInset.height
+            readonly property real sx: topBarMouseArea.x + barUnitInset.x + topBarSlide.x + barBackground.x
+            readonly property real sy: topBarMouseArea.y + barUnitInset.y + topBarSlide.y + barBackground.y
 
-            x: {
-                switch (barPos) {
-                case SettingsData.Position.Left:
-                    return bx + bw;
-                case SettingsData.Position.Right:
-                    return bx - r;
-                default:
-                    return atEnd ? bx + bw - r : bx;
-                }
-            }
-            y: {
-                switch (barPos) {
-                case SettingsData.Position.Top:
-                    return by + bh;
-                case SettingsData.Position.Bottom:
-                    return by - r;
-                default:
-                    return atEnd ? by + bh - r : by;
-                }
-            }
-            width: r
-            height: r
+            x: sx + wing.x
+            y: sy + wing.y
+            width: wing.width
+            height: wing.height
 
             Region {
                 intersection: Intersection.Subtract
-                radius: wingRegion.r
-                width: wingRegion.r * 2
-                height: wingRegion.r * 2
-                x: {
-                    switch (barPos) {
-                    case SettingsData.Position.Left:
-                        return wingRegion.bx + wingRegion.bw;
-                    case SettingsData.Position.Right:
-                        return wingRegion.bx - wingRegion.r * 2;
-                    default:
-                        return wingRegion.atEnd ? wingRegion.bx + wingRegion.bw - wingRegion.r * 2 : wingRegion.bx;
-                    }
+                shape: RegionShape.Ellipse
+                x: wingRegion.x + wingRegion.wing.discRect.x
+                y: wingRegion.y + wingRegion.wing.discRect.y
+                width: wingRegion.wing.discRect.width
+                height: wingRegion.wing.discRect.height
+            }
+        }
+    }
+
+    Component {
+        id: blurIslandRegionComp
+
+        Region {
+            x: topBarMouseArea.x + islandLoader.x + topBarSlide.x + (barWindow.islandHost?.currentVisualX ?? 0)
+            y: topBarMouseArea.y + islandLoader.y + topBarSlide.y + (barWindow.islandHost?.currentVisualY ?? 0)
+            width: barWindow.islandHost?.currentVisualWidth ?? 0
+            height: barWindow.islandHost?.currentVisualHeight ?? 0
+            radius: barWindow.islandHost?.currentSurfaceRadius ?? 0
+        }
+    }
+
+    Component {
+        id: blurSatelliteRegionComp
+
+        Region {
+            id: satelliteRegion
+
+            property Item surface
+
+            readonly property real sx: topBarMouseArea.x + barUnitInset.x + topBarSlide.x + surface.x
+            readonly property real sy: topBarMouseArea.y + barUnitInset.y + topBarSlide.y + surface.y
+            readonly property bool horizontal: !surface.isVertical
+            readonly property bool far: surface.crossFar
+            readonly property int startR: Math.round(surface.alongStartRadius)
+            readonly property int endR: Math.round(surface.alongEndRadius)
+
+            x: sx
+            y: sy
+            width: surface.width
+            height: surface.height
+            topLeftRadius: far ? startR : 0
+            topRightRadius: horizontal ? (far ? endR : 0) : (far ? 0 : startR)
+            bottomLeftRadius: horizontal ? (far ? 0 : startR) : (far ? endR : 0)
+            bottomRightRadius: far ? 0 : endR
+
+            Region {
+                x: satelliteRegion.sx + satelliteRegion.surface.startSweepRect.x
+                y: satelliteRegion.sy + satelliteRegion.surface.startSweepRect.y
+                width: satelliteRegion.surface.startSweepRect.width
+                height: satelliteRegion.surface.startSweepRect.height
+
+                Region {
+                    intersection: Intersection.Subtract
+                    shape: RegionShape.Ellipse
+                    x: satelliteRegion.sx + satelliteRegion.surface.startSweepDisc.x
+                    y: satelliteRegion.sy + satelliteRegion.surface.startSweepDisc.y
+                    width: satelliteRegion.surface.startSweepDisc.width
+                    height: satelliteRegion.surface.startSweepDisc.height
                 }
-                y: {
-                    switch (barPos) {
-                    case SettingsData.Position.Top:
-                        return wingRegion.by + wingRegion.bh;
-                    case SettingsData.Position.Bottom:
-                        return wingRegion.by - wingRegion.r * 2;
-                    default:
-                        return wingRegion.atEnd ? wingRegion.by + wingRegion.bh - wingRegion.r * 2 : wingRegion.by;
-                    }
+            }
+
+            Region {
+                x: satelliteRegion.sx + satelliteRegion.surface.endSweepRect.x
+                y: satelliteRegion.sy + satelliteRegion.surface.endSweepRect.y
+                width: satelliteRegion.surface.endSweepRect.width
+                height: satelliteRegion.surface.endSweepRect.height
+
+                Region {
+                    intersection: Intersection.Subtract
+                    shape: RegionShape.Ellipse
+                    x: satelliteRegion.sx + satelliteRegion.surface.endSweepDisc.x
+                    y: satelliteRegion.sy + satelliteRegion.surface.endSweepDisc.y
+                    width: satelliteRegion.surface.endSweepDisc.width
+                    height: satelliteRegion.surface.endSweepDisc.height
                 }
             }
         }
@@ -274,7 +346,7 @@ Item {
     Component {
         id: blurCornerRegionComp
 
-        // BarCanvas paints square corners at the attached edge and the wing roots (#2975); re-add what the body radius rounds off
+        // The surface paints square corners at the attached edge and the wing roots (#2975); re-add what the body radius rounds off
         Region {
             id: cornerRegion
 
@@ -284,7 +356,8 @@ Item {
             readonly property real r: barBackground.rt
             readonly property bool attachedEdgeCorner: (barBackground.isTop && !atBottom) || (barBackground.isBottom && atBottom) || (barBackground.isLeft && !atRight) || (barBackground.isRight && atRight)
             readonly property bool wingEdgeCorner: (barBackground.isTop && atBottom) || (barBackground.isBottom && !atBottom) || (barBackground.isLeft && atRight) || (barBackground.isRight && !atRight)
-            readonly property bool squared: (barBackground.edgeAttached && attachedEdgeCorner) || (barBackground.gothEnabled && wingEdgeCorner)
+            readonly property bool gothCorner: barBackground.alongWings ? attachedEdgeCorner : wingEdgeCorner
+            readonly property bool squared: (barBackground.edgeAttached && attachedEdgeCorner) || (barBackground.gothEnabled && gothCorner)
 
             x: topBarMouseArea.x + barUnitInset.x + topBarSlide.x + (atRight ? barUnitInset.width - r : 0)
             y: topBarMouseArea.y + barUnitInset.y + topBarSlide.y + (atBottom ? barUnitInset.height - r : 0)
@@ -297,7 +370,9 @@ Item {
         id: barBlur
         visible: false
 
-        readonly property bool barHasTransparency: barWindow._backgroundAlpha > 0 && barWindow._backgroundAlpha < 1
+        readonly property bool barHasTransparency: !barWindow.isIsland && barWindow._backgroundAlpha > 0 && barWindow._backgroundAlpha < 1
+        readonly property bool islandTranslucent: !!barWindow.islandHost && barWindow.islandHost.surfaceOpacity > 0 && barWindow.islandHost.surfaceOpacity < 1
+        readonly property bool satelliteTranslucent: barWindow.islandSatelliteBackground && barWindow.islandSatellitesEnabled && barWindow.islandSatelliteOpacity > 0 && barWindow.islandSatelliteOpacity < 1
 
         function rebuild() {
             teardown();
@@ -311,7 +386,7 @@ Item {
 
             const widgets = barWindow._blurWidgetItems.filter(w => w && w.visible && w.width > 0 && w.height > 0);
             const hasBar = barHasTransparency;
-            if (!hasBar && widgets.length === 0)
+            if (!hasBar && widgets.length === 0 && !islandTranslucent && !satelliteTranslucent)
                 return;
 
             const region = blurRegionComp.createObject(barWindow);
@@ -329,6 +404,20 @@ Item {
             }
 
             const subRegions = [];
+            if (islandTranslucent) {
+                const islandSub = blurIslandRegionComp.createObject(region);
+                if (islandSub)
+                    subRegions.push(islandSub);
+            }
+            if (satelliteTranslucent) {
+                for (const surface of [leadingSatelliteSurface, trailingSatelliteSurface]) {
+                    const sub = blurSatelliteRegionComp.createObject(region, {
+                        surface: surface
+                    });
+                    if (sub)
+                        subRegions.push(sub);
+                }
+            }
             for (let i = 0; i < widgets.length; i++) {
                 const sub = blurSubRegionComp.createObject(region, {
                     w: widgets[i]
@@ -338,9 +427,11 @@ Item {
             }
 
             if (hasBar && barBackground.gothEnabled && barWindow._wingR > 0) {
-                for (const atEnd of [false, true]) {
+                for (const wingItem of [barBackground.leadingWing, barBackground.trailingWing]) {
+                    if (!wingItem.visible)
+                        continue;
                     const wing = blurWingRegionComp.createObject(region, {
-                        atEnd: atEnd
+                        wing: wingItem
                     });
                     if (wing)
                         subRegions.push(wing);
@@ -374,56 +465,14 @@ Item {
         }
 
         onBarHasTransparencyChanged: _blurRebuildTimer.restart()
+        onIslandTranslucentChanged: _blurRebuildTimer.restart()
+        onSatelliteTranslucentChanged: _blurRebuildTimer.restart()
 
-        Connections {
-            target: BlurService
-            function onEnabledChanged() {
-                barBlur.rebuild();
-            }
-        }
+        readonly property bool blurServiceEnabled: BlurService.enabled
+        readonly property bool frameEffectiveEnabled: FrameTransitionState.effectiveFrameEnabled
 
-        Connections {
-            target: FrameTransitionState
-            function onEffectiveFrameEnabledChanged() {
-                barBlur.rebuild();
-            }
-        }
-
-        Connections {
-            target: topBarSlide
-            function onXChanged() {
-                barWindow.refreshBlurRegion();
-            }
-            function onYChanged() {
-                barWindow.refreshBlurRegion();
-            }
-        }
-
-        Connections {
-            target: barUnitInset
-            function onXChanged() {
-                barWindow.refreshBlurRegion();
-            }
-            function onYChanged() {
-                barWindow.refreshBlurRegion();
-            }
-            function onWidthChanged() {
-                barWindow.refreshBlurRegion();
-            }
-            function onHeightChanged() {
-                barWindow.refreshBlurRegion();
-            }
-        }
-
-        Connections {
-            target: barBackground
-            function onGothEnabledChanged() {
-                _blurRebuildTimer.restart();
-            }
-            function onWingChanged() {
-                barWindow.refreshBlurRegion();
-            }
-        }
+        onBlurServiceEnabledChanged: rebuild()
+        onFrameEffectiveEnabledChanged: rebuild()
 
         Component.onCompleted: rebuild()
         Component.onDestruction: teardown()
@@ -451,15 +500,10 @@ Item {
 
     readonly property bool isVertical: axis.isVertical
 
-    readonly property color _surfaceContainer: Theme.surfaceContainer
+    readonly property color _hostSurface: SettingsData.barSurfaceColor(barConfig)
     readonly property string _barId: barConfig?.id ?? "default"
-    property real _backgroundAlpha: barConfig?.transparency ?? 1.0
-    readonly property color _bgColor: (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? Theme.withAlpha(SettingsData.effectiveFrameColor, SettingsData.frameOpacity) : Theme.withAlpha(_surfaceContainer, _backgroundAlpha)
-
-    function _updateBackgroundAlpha() {
-        const live = SettingsData.barConfigs.find(c => c.id === _barId);
-        _backgroundAlpha = (live ?? barConfig)?.transparency ?? 1.0;
-    }
+    readonly property real _backgroundAlpha: SettingsData.barTransparency(barConfig)
+    readonly property color _bgColor: (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? Theme.frameSurfaceColor : Theme.withAlpha(_hostSurface, _backgroundAlpha)
     readonly property real _dpr: CompositorService.getScreenScale(barWindow.screen)
 
     property string screenName: modelData.name
@@ -469,7 +513,7 @@ Item {
     readonly property var renderBarConfig: SettingsData.effectiveBarConfigForRender(barConfig, usesFrameBarChrome)
 
     property bool gothCornersEnabled: renderBarConfig?.gothCornersEnabled ?? false
-    property real wingtipsRadius: renderBarConfig?.gothCornerRadiusOverride ? (renderBarConfig?.gothCornerRadiusValue ?? 12) : Theme.cornerRadius
+    property real wingtipsRadius: renderBarConfig?.gothCornerRadiusOverride ? (renderBarConfig?.gothCornerRadiusValue ?? 12) : Theme.windowRadius
     readonly property real _wingR: Math.max(0, wingtipsRadius)
 
     // Shadow buffer: extra window space for shadow to render beyond bar bounds
@@ -493,127 +537,29 @@ Item {
     property bool shouldHideForWindows: false
 
     function _updateHasMaximizedToplevel() {
-        if (!(barConfig?.maximizeDetection ?? true)) {
-            hasMaximizedToplevel = false;
-            return;
-        }
-        if (CompositorService.isMango) {
-            const out = MangoService.outputs[screenName];
-            const active = new Set((out?.activeTags) || []);
-            const wins = MangoService.windows || [];
-            for (let i = 0; i < wins.length; i++) {
-                const w = wins[i];
-                if (!w || w.monitor !== screenName || w.is_minimized)
-                    continue;
-                if (active.size > 0 && !(w.tags || []).some(t => active.has(t)))
-                    continue;
-                if (w.is_maximized || w.is_fullscreen) {
-                    hasMaximizedToplevel = true;
-                    return;
-                }
-            }
-            hasMaximizedToplevel = false;
-            return;
-        }
-        if (!CompositorService.isHyprland && !CompositorService.isNiri && !CompositorService.isAqueous) {
-            hasMaximizedToplevel = false;
-            return;
-        }
-
-        const filtered = CompositorService.filterCurrentWorkspace(CompositorService.sortedToplevels, screenName);
-        for (let i = 0; i < filtered.length; i++) {
-            if (filtered[i]?.maximized) {
-                hasMaximizedToplevel = true;
-                return;
-            }
-        }
-        hasMaximizedToplevel = false;
+        hasMaximizedToplevel = (barConfig?.maximizeDetection ?? true) && CompositorService.maximizedWindowOnScreen(screenName);
     }
 
     function _updateShouldHideForWindows() {
-        if (!(barConfig?.showOnWindowsOpen ?? false)) {
+        if (!(barConfig?.showOnWindowsOpen ?? false) || !(barConfig?.autoHide ?? false)) {
             shouldHideForWindows = false;
             return;
         }
-        if (!(barConfig?.autoHide ?? false)) {
-            shouldHideForWindows = false;
-            return;
-        }
-        if (!CompositorService.isNiri && !CompositorService.isHyprland && !CompositorService.isMango && !CompositorService.isAqueous) {
-            shouldHideForWindows = false;
-            return;
-        }
-
-        if (CompositorService.isNiri) {
-            let currentWorkspaceId = null;
-            for (let i = 0; i < NiriService.allWorkspaces.length; i++) {
-                const ws = NiriService.allWorkspaces[i];
-                if (ws.output === screenName && ws.is_active) {
-                    currentWorkspaceId = ws.id;
-                    break;
-                }
-            }
-
-            if (currentWorkspaceId === null) {
-                shouldHideForWindows = false;
-                return;
-            }
-
-            let hasTiled = false;
-            let hasFloatingTouchingBar = false;
-            const pos = barConfig?.position ?? 0;
-            const barThickness = barWindow.effectiveBarThickness + (barConfig?.spacing ?? 4);
-
-            for (let i = 0; i < NiriService.windows.length; i++) {
-                const win = NiriService.windows[i];
-                if (win.workspace_id !== currentWorkspaceId)
-                    continue;
-
-                if (!win.is_floating) {
-                    hasTiled = true;
-                    continue;
-                }
-
-                const tilePos = win.layout?.tile_pos_in_workspace_view;
-                const winSize = win.layout?.window_size || win.layout?.tile_size;
-                if (!tilePos || !winSize)
-                    continue;
-
-                switch (pos) {
-                case SettingsData.Position.Top:
-                    if (tilePos[1] < barThickness)
-                        hasFloatingTouchingBar = true;
-                    break;
-                case SettingsData.Position.Bottom:
-                    const screenHeight = barWindow.screen?.height ?? 0;
-                    if (tilePos[1] + winSize[1] > screenHeight - barThickness)
-                        hasFloatingTouchingBar = true;
-                    break;
-                case SettingsData.Position.Left:
-                    if (tilePos[0] < barThickness)
-                        hasFloatingTouchingBar = true;
-                    break;
-                case SettingsData.Position.Right:
-                    const screenWidth = barWindow.screen?.width ?? 0;
-                    if (tilePos[0] + winSize[0] > screenWidth - barThickness)
-                        hasFloatingTouchingBar = true;
-                    break;
-                }
-            }
-
-            shouldHideForWindows = hasTiled || hasFloatingTouchingBar;
-            return;
-        }
-
-        const filtered = CompositorService.filterCurrentWorkspace(CompositorService.sortedToplevels, screenName);
-        shouldHideForWindows = filtered.length > 0;
+        shouldHideForWindows = CompositorService.windowsHideBar(screenName, barConfig?.position ?? 0, barWindow.effectiveBarThickness + (barConfig?.spacing ?? 4), barWindow.screen?.width ?? 0, barWindow.screen?.height ?? 0);
     }
 
     readonly property bool edgeAttached: (barConfig?.attachToScreenEdge ?? false) && !(FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome)
-    property real effectiveSpacing: (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? 0 : ((edgeAttached || (flattenForMaximizedWindow && hasMaximizedToplevel)) ? 0 : (barConfig?.spacing ?? 4))
+    readonly property string barLengthMode: isIsland || (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? "full" : (barConfig?.barLengthMode ?? "full")
+    readonly property bool fitToWidgets: barLengthMode === "fit"
+    readonly property bool spansEdge: barLengthMode === "full" && ((FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) || (barConfig?.barLengthPadding ?? 0) <= 0)
+    property bool _fitSettled: false
+    property real effectiveSpacing: isIsland || (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? 0 : ((edgeAttached || (flattenForMaximizedWindow && hasMaximizedToplevel)) ? 0 : (barConfig?.spacing ?? 4))
 
-    Behavior on effectiveSpacing {
-        enabled: barWindow.hostWindow?.visible ?? false
+    property real renderedSpacing: effectiveSpacing
+    readonly property real surfaceSpacing: Math.max(effectiveSpacing, renderedSpacing)
+
+    Behavior on renderedSpacing {
+        enabled: (barWindow.hostWindow?.visible ?? false) && !SettingsData.reduceMotion
         NumberAnimation {
             duration: Theme.shortDuration
             easing.type: Easing.OutCubic
@@ -623,106 +569,71 @@ Item {
     readonly property int notificationCount: NotificationService.notifications.length
     readonly property real effectiveBarThickness: (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? SettingsData.frameBarSize : Theme.barThickness(barConfig?.innerPadding ?? 4, _dpr)
     readonly property real effectiveBarLengthPadding: {
+        if (barLengthMode === "percent") {
+            const percent = Math.min(100, Math.max(10, barConfig?.barLengthPercent ?? 80));
+            return fittedAvailableLength * (1 - percent / 100) / 2;
+        }
         if ((FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) || (flattenForMaximizedWindow && hasMaximizedToplevel))
             return 0;
         const pad = Math.max(0, barConfig?.barLengthPadding ?? 0);
         const length = isVertical ? height : width;
-        return length > 0 ? Math.min(pad, Math.max(0, length / 2 - effectiveSpacing)) : pad;
+        return length > 0 ? Math.min(pad, Math.max(0, length / 2 - renderedSpacing)) : pad;
+    }
+    readonly property real fittedAvailableLength: {
+        const length = isVertical ? topBarMouseArea.height : topBarMouseArea.width;
+        const startGap = isVertical && hasAdjacentTopBar ? 0 : renderedSpacing;
+        const endGap = isVertical && hasAdjacentBottomBar ? 0 : renderedSpacing;
+        return Math.max(0, length - startGap - endGap);
+    }
+    property real fittedLeadingPad: fitToWidgets ? Math.max(0, topBarContent.fittedLeadingPad) : 0
+    property real fittedTrailingPad: fitToWidgets ? Math.max(0, topBarContent.fittedTrailingPad) : 0
+    readonly property int lengthPaddingStartPx: Theme.px(fitToWidgets ? fittedLeadingPad : effectiveBarLengthPadding, _dpr)
+    readonly property int lengthPaddingEndPx: Theme.px(fitToWidgets ? fittedTrailingPad : effectiveBarLengthPadding, _dpr)
+    readonly property bool fitAnimated: fitToWidgets && _fitSettled && (hostWindow?.visible ?? false) && !SettingsData.reduceMotion
+
+    Behavior on fittedLeadingPad {
+        enabled: barWindow.fitAnimated
+        NumberAnimation {
+            duration: Theme.shortDuration
+            easing.type: Easing.OutCubic
+        }
+    }
+
+    Behavior on fittedTrailingPad {
+        enabled: barWindow.fitAnimated
+        NumberAnimation {
+            duration: Theme.shortDuration
+            easing.type: Easing.OutCubic
+        }
+    }
+
+    DeferredAction {
+        id: fitSettle
+        onTriggered: barWindow._fitSettled = true
     }
     readonly property bool effectiveOpenOnOverview: (FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome) ? SettingsData.frameShowOnOverview : (barConfig?.openOnOverview ?? false)
     readonly property real widgetThickness: Theme.barWidgetThickness(barConfig?.innerPadding ?? 4, _dpr)
 
-    readonly property bool hasAdjacentTopBar: {
-        if (barConfig?.autoHide ?? false)
-            return false;
-        if (!isVertical)
-            return false;
-        return SettingsData.barConfigs.some(bc => {
-            if (!bc.enabled || bc.id === barConfig?.id)
-                return false;
-            if (SettingsData.isIslandBarConfig(bc))
-                return false;
-            if (bc.autoHide)
-                return false;
-            if (!(bc.visible ?? true))
-                return false;
-            if (bc.position !== SettingsData.Position.Top && bc.position !== 0)
-                return false;
-            return SettingsData.barConfigCoversScreen(bc, barWindow.screen);
-        });
-    }
+    readonly property bool hasAdjacentTopBar: isVertical && ShellLayout.adjacentBar(screen, "top", barConfig) !== null
+    readonly property bool hasAdjacentBottomBar: isVertical && ShellLayout.adjacentBar(screen, "bottom", barConfig) !== null
+    readonly property bool hasAdjacentLeftBar: !isVertical && ShellLayout.adjacentBar(screen, "left", barConfig) !== null
+    readonly property bool hasAdjacentRightBar: !isVertical && ShellLayout.adjacentBar(screen, "right", barConfig) !== null
 
-    readonly property bool hasAdjacentBottomBar: {
-        if (barConfig?.autoHide ?? false)
-            return false;
-        if (!isVertical)
-            return false;
-        const result = SettingsData.barConfigs.some(bc => {
-            if (!bc.enabled || bc.id === barConfig?.id)
-                return false;
-            if (SettingsData.isIslandBarConfig(bc))
-                return false;
-            if (bc.autoHide)
-                return false;
-            if (!(bc.visible ?? true))
-                return false;
-            if (bc.position !== SettingsData.Position.Bottom && bc.position !== 1)
-                return false;
-            return SettingsData.barConfigCoversScreen(bc, barWindow.screen);
-        });
-        return result;
-    }
+    readonly property real taskbarStartInset: SettingsData.taskbarInsetForEdge(screen, isVertical ? "top" : "left")
+    readonly property real taskbarEndInset: SettingsData.taskbarInsetForEdge(screen, isVertical ? "bottom" : "right")
 
-    readonly property bool hasAdjacentLeftBar: {
-        if (barConfig?.autoHide ?? false)
-            return false;
-        if (isVertical)
-            return false;
-        const result = SettingsData.barConfigs.some(bc => {
-            if (!bc.enabled || bc.id === barConfig?.id)
-                return false;
-            if (SettingsData.isIslandBarConfig(bc))
-                return false;
-            if (bc.autoHide)
-                return false;
-            if (!(bc.visible ?? true))
-                return false;
-            if (bc.position !== SettingsData.Position.Left && bc.position !== 2)
-                return false;
-            return SettingsData.barConfigCoversScreen(bc, barWindow.screen);
-        });
-        return result;
-    }
-
-    readonly property bool hasAdjacentRightBar: {
-        if (barConfig?.autoHide ?? false)
-            return false;
-        if (isVertical)
-            return false;
-        const result = SettingsData.barConfigs.some(bc => {
-            if (!bc.enabled || bc.id === barConfig?.id)
-                return false;
-            if (SettingsData.isIslandBarConfig(bc))
-                return false;
-            if (bc.autoHide)
-                return false;
-            if (!(bc.visible ?? true))
-                return false;
-            if (bc.position !== SettingsData.Position.Right && bc.position !== 3)
-                return false;
-            return SettingsData.barConfigCoversScreen(bc, barWindow.screen);
-        });
-        return result;
-    }
-
-    readonly property real surfaceImplicitHeight: !isVertical ? Theme.px(effectiveBarThickness + effectiveSpacing + ((renderBarConfig?.gothCornersEnabled ?? false) && !hasMaximizedToplevel ? _wingR : 0), _dpr) + _shadowBuffer : 0
-    readonly property real surfaceImplicitWidth: isVertical ? Theme.px(effectiveBarThickness + effectiveSpacing + ((renderBarConfig?.gothCornersEnabled ?? false) && !hasMaximizedToplevel ? _wingR : 0), _dpr) + _shadowBuffer : 0
+    readonly property real barSurfaceThickness: Theme.px(effectiveBarThickness + surfaceSpacing + ((renderBarConfig?.gothCornersEnabled ?? false) && !hasMaximizedToplevel && spansEdge ? _wingR : 0), _dpr) + _shadowBuffer
+    readonly property bool islandSheetOut: islandHost?.sheetOut ?? false
+    readonly property real hostThickness: isIsland ? (islandHost?.hostThickness ?? islandStripThickness) : Math.max(barSurfaceThickness, islandSheetOut ? islandHost.hostThickness : 0)
+    readonly property real hideSlideThickness: isIsland ? hostThickness : barSurfaceThickness
+    readonly property real surfaceImplicitHeight: !isVertical ? hostThickness : 0
+    readonly property real surfaceImplicitWidth: isVertical ? hostThickness : 0
 
     Component.onCompleted: {
         updateGpuTempConfig();
-        _updateBackgroundAlpha();
         _updateHasMaximizedToplevel();
         _updateShouldHideForWindows();
+        fitSettle.schedule();
     }
 
     Connections {
@@ -754,22 +665,12 @@ Item {
         DgopService.nonNvidiaGpuTempEnabled = hasGpuTempWidget || SessionData.nonNvidiaGpuTempEnabled;
     }
 
-    Connections {
-        function onBarConfigChanged() {
-            barWindow.updateGpuTempConfig();
-            barWindow._updateBackgroundAlpha();
-            barWindow._updateHasMaximizedToplevel();
-            barWindow._updateShouldHideForWindows();
-        }
+    readonly property var rootWindowBarConfig: rootWindow.barConfig
 
-        target: rootWindow
-    }
-
-    Connections {
-        target: SettingsData
-        function onBarConfigsChanged() {
-            barWindow._updateBackgroundAlpha();
-        }
+    onRootWindowBarConfigChanged: {
+        updateGpuTempConfig();
+        _updateHasMaximizedToplevel();
+        _updateShouldHideForWindows();
     }
 
     Connections {
@@ -778,51 +679,39 @@ Item {
             barWindow._updateHasMaximizedToplevel();
             barWindow._updateShouldHideForWindows();
         }
-    }
-
-    Connections {
-        target: NiriService
-        function onAllWorkspacesChanged() {
+        function onWorkspaceStateChanged() {
             barWindow._updateHasMaximizedToplevel();
             barWindow._updateShouldHideForWindows();
         }
     }
 
-    Connections {
-        function onNvidiaGpuTempEnabledChanged() {
-            barWindow.updateGpuTempConfig();
-        }
+    readonly property bool sessionNvidiaGpuTempEnabled: SessionData.nvidiaGpuTempEnabled
+    readonly property bool sessionNonNvidiaGpuTempEnabled: SessionData.nonNvidiaGpuTempEnabled
 
-        function onNonNvidiaGpuTempEnabledChanged() {
-            barWindow.updateGpuTempConfig();
-        }
-
-        target: SessionData
-    }
+    onSessionNvidiaGpuTempEnabledChanged: updateGpuTempConfig()
+    onSessionNonNvidiaGpuTempEnabledChanged: updateGpuTempConfig()
 
     readonly property int barPos: barConfig?.position ?? 0
 
     readonly property bool reserveExclusiveWhenAutoHidden: FrameTransitionState.effectiveFrameEnabled && usesFrameBarChrome && !!barWindow.screen && SettingsData.isScreenInPreferences(barWindow.screen, SettingsData.frameScreenPreferences)
 
-    readonly property real surfaceExclusiveZone: (!(barConfig?.visible ?? true) || (topBarCore.autoHide && !barWindow.reserveExclusiveWhenAutoHidden)) ? -1 : (barWindow.effectiveBarThickness + effectiveSpacing + (usesFrameBarChrome ? 0 : (barConfig?.bottomGap ?? 0)))
+    readonly property real surfaceExclusiveZone: isIsland ? ((islandFree || (islandHost?.floating ?? false)) ? 0 : islandStripThickness) : (!(barConfig?.visible ?? true) || (topBarCore.autoHide && !barWindow.reserveExclusiveWhenAutoHidden)) ? -1 : (barWindow.effectiveBarThickness + effectiveSpacing + (usesFrameBarChrome ? 0 : (barConfig?.bottomGap ?? 0)))
 
     readonly property alias inputMaskItem: inputMask
 
     Item {
         id: inputMask
 
-        readonly property int barThickness: Theme.px(barWindow.effectiveBarThickness + barWindow.effectiveSpacing, barWindow._dpr)
-        readonly property int lengthPaddingPx: Theme.px(barWindow.effectiveBarLengthPadding, barWindow._dpr)
-
+        readonly property int barThickness: Theme.px(barWindow.isIsland ? barWindow.islandStripThickness : barWindow.effectiveBarThickness + barWindow.surfaceSpacing, barWindow._dpr)
         readonly property bool inOverviewWithShow: CompositorService.overviewActiveOnScreen(barWindow.screenName) && barWindow.effectiveOpenOnOverview
-        readonly property bool effectiveVisible: (barConfig?.visible ?? true) || inOverviewWithShow
+        readonly property bool effectiveVisible: (barConfig?.visible ?? true) || inOverviewWithShow || topBarCore.islandPinsReveal
         readonly property bool showing: effectiveVisible && (topBarCore.reveal || inOverviewWithShow)
 
         readonly property int maskThickness: showing ? barThickness : 1
 
         x: {
             if (!axis.isVertical) {
-                return lengthPaddingPx;
+                return barWindow.lengthPaddingStartPx + barWindow.taskbarStartInset;
             } else {
                 switch (barPos) {
                 case SettingsData.Position.Left:
@@ -836,7 +725,7 @@ Item {
         }
         y: {
             if (axis.isVertical) {
-                return lengthPaddingPx;
+                return barWindow.lengthPaddingStartPx + barWindow.taskbarStartInset;
             } else {
                 switch (barPos) {
                 case SettingsData.Position.Top:
@@ -848,8 +737,8 @@ Item {
                 }
             }
         }
-        width: axis.isVertical ? maskThickness : parent.width - lengthPaddingPx * 2
-        height: axis.isVertical ? parent.height - lengthPaddingPx * 2 : maskThickness
+        width: axis.isVertical ? maskThickness : Math.max(0, parent.width - barWindow.lengthPaddingStartPx - barWindow.lengthPaddingEndPx - barWindow.taskbarStartInset - barWindow.taskbarEndInset)
+        height: axis.isVertical ? Math.max(0, parent.height - barWindow.lengthPaddingStartPx - barWindow.lengthPaddingEndPx - barWindow.taskbarStartInset - barWindow.taskbarEndInset) : maskThickness
     }
 
     readonly property bool clickThroughEnabled: barConfig?.clickThrough ?? false
@@ -863,8 +752,13 @@ Item {
         const pad = padding !== undefined ? padding : 16;
         if (!inputMask.showing)
             return false;
-        const topLeft = inputMask.mapToItem(null, 0, 0);
+        const topLeft = topBarContent.surfaceContext.screenPoint(inputMask, 0, 0);
         return gx >= topLeft.x - pad && gx < topLeft.x + inputMask.width + pad && gy >= topLeft.y - pad && gy < topLeft.y + inputMask.height + pad;
+    }
+
+    // On-demand read for fixtures; the bound rects are null while nothing consumes them.
+    function sectionRectFor(sectionId) {
+        return sectionId === "center" ? sectionRect(_centerSection, true, 0) : sectionRect(sectionId === "left" ? _leftSection : _rightSection, false, 0);
     }
 
     function sectionRect(section, isCenter, _dep) {
@@ -880,6 +774,8 @@ Item {
         const implW = section.implicitWidth || 0;
         const implH = section.implicitHeight || 0;
         const contentSize = isCenter ? (section.contentSize || 0) : 0;
+        const spread = !barWindow.islandSatellitesHugIsland || isCenter ? 0 : (section === barWindow._leftSection ? barWindow.islandLeadingSpread : barWindow.islandTrailingSpread);
+        const spreadBefore = section === barWindow._rightSection ? spread : 0;
 
         let offsetX = isCenter && !barWindow.isVertical ? (section.width - implW) / 2 : 0;
         let offsetY = !barWindow.isVertical ? (section.height - implH) / 2 : (isCenter ? (section.height - implH) / 2 : 0);
@@ -897,12 +793,12 @@ Item {
             }
         }
 
-        const edgePad = 2;
+        const edgePad = Theme.spacingXXS;
         return {
-            "x": pos.x + offsetX - edgePad,
-            "y": pos.y + offsetY - edgePad,
-            "w": w + edgePad * 2,
-            "h": h + edgePad * 2
+            "x": pos.x + offsetX - edgePad - (barWindow.isVertical ? 0 : spreadBefore),
+            "y": pos.y + offsetY - edgePad - (barWindow.isVertical ? spreadBefore : 0),
+            "w": w + edgePad * 2 + (barWindow.isVertical ? 0 : spread),
+            "h": h + edgePad * 2 + (barWindow.isVertical ? spread : 0)
         };
     }
 
@@ -911,7 +807,7 @@ Item {
         anchors.fill: parent
         layer.enabled: false
 
-        property bool autoHide: barConfig?.autoHide ?? false
+        property bool autoHide: !barWindow.isIsland && (barConfig?.autoHide ?? false)
         property bool revealSticky: false
         // In click-through mode the hidden bar's input mask covers the full
         // band while the revealed bar's mask covers only the widget sections,
@@ -959,7 +855,7 @@ Item {
             interval: barConfig?.autoHideDelay ?? 250
             repeat: false
             onTriggered: {
-                if (!topBarCore.hoverReveal && !topBarCore.popoutPinsReveal)
+                if (!topBarCore.hoverReveal && !topBarCore.popoutPinsReveal && !topBarCore.islandPinsReveal)
                     topBarCore.revealSticky = false;
             }
         }
@@ -967,10 +863,13 @@ Item {
         property bool hasActivePopout: false
 
         readonly property bool popoutPinsReveal: !!(hasActivePopout && !(barConfig?.autoHideStrict ?? false))
+        readonly property bool islandPinsReveal: !!barWindow.islandHost && (barWindow.islandHost.sheetOut || barWindow.islandHost.transientActive)
 
         onHasActivePopoutChanged: evaluateReveal()
 
         onPopoutPinsRevealChanged: evaluateReveal()
+
+        onIslandPinsRevealChanged: evaluateReveal()
 
         function updateActivePopoutState() {
             if (!barWindow.screen)
@@ -980,7 +879,8 @@ Item {
             const activeTrayMenu = TrayMenuManager.activeTrayMenus[screenName];
             const trayOpen = rootWindow.systemTrayMenuOpen;
 
-            const hasVisiblePopout = activePopout && activePopout.shouldBeVisible;
+            const origin = activePopout?.sourceRegistration?.context;
+            const hasVisiblePopout = activePopout?.shouldBeVisible && (!origin || (origin.kind === "bar" && origin.barId === barConfig?.id));
             topBarCore.hasActivePopout = !!(hasVisiblePopout || activeTrayMenu || trayOpen);
         }
 
@@ -996,13 +896,9 @@ Item {
             }
         }
 
-        Connections {
-            target: TrayMenuManager
+        readonly property var trayActiveMenus: TrayMenuManager.activeTrayMenus
 
-            function onActiveTrayMenusChanged() {
-                topBarCore.updateActivePopoutState();
-            }
-        }
+        onTrayActiveMenusChanged: updateActivePopoutState()
 
         property bool reveal: {
             const inOverviewWithShow = CompositorService.overviewActiveOnScreen(barWindow.screenName) && barWindow.effectiveOpenOnOverview;
@@ -1010,25 +906,23 @@ Item {
                 return true;
 
             const showOnWindowsSetting = barConfig?.showOnWindowsOpen ?? false;
-            if (showOnWindowsSetting && autoHide && (CompositorService.isNiri || CompositorService.isHyprland || CompositorService.isMango)) {
+            if (showOnWindowsSetting && autoHide && CompositorService.windowOverlapSupported) {
                 if (barWindow.shouldHideForWindows)
-                    return hoverReveal || popoutPinsReveal || revealSticky || ipcReveal;
+                    return hoverReveal || popoutPinsReveal || islandPinsReveal || revealSticky || ipcReveal;
                 return true;
             }
 
             if (CompositorService.overviewActiveOnScreen(barWindow.screenName))
-                return hoverReveal || popoutPinsReveal || revealSticky || ipcReveal;
+                return hoverReveal || popoutPinsReveal || islandPinsReveal || revealSticky || ipcReveal;
 
-            return (barConfig?.visible ?? true) && (!autoHide || hoverReveal || popoutPinsReveal || revealSticky || ipcReveal);
+            return ((barConfig?.visible ?? true) || islandPinsReveal) && (!autoHide || hoverReveal || popoutPinsReveal || islandPinsReveal || revealSticky || ipcReveal);
         }
 
-        Connections {
-            function onBarConfigChanged() {
-                topBarCore.autoHide = barConfig?.autoHide ?? false;
-                topBarCore.evaluateReveal();
-            }
+        readonly property var rootWindowBarConfig: rootWindow.barConfig
 
-            target: rootWindow
+        onRootWindowBarConfigChanged: {
+            autoHide = !barWindow.isIsland && (barConfig?.autoHide ?? false);
+            evaluateReveal();
         }
 
         Component.onCompleted: topBarCore.updateActivePopoutState()
@@ -1037,14 +931,14 @@ Item {
             if (!autoHide)
                 return;
 
-            if (hoverReveal) {
+            if (topBarMouseArea.containsMouse && !gapEnterSuppressed) {
                 SettingsData.setBarIpcReveal(barConfig?.id ?? "", false);
                 revealSticky = true;
                 revealHold.stop();
                 return;
             }
 
-            if (popoutPinsReveal) {
+            if (popoutPinsReveal || islandPinsReveal) {
                 revealSticky = true;
                 revealHold.stop();
                 return;
@@ -1057,34 +951,25 @@ Item {
             revealHold.restart();
         }
 
-        Connections {
-            target: topBarMouseArea
-            function onContainsMouseChanged() {
-                if (!topBarMouseArea.containsMouse) {
+        MouseArea {
+            id: topBarMouseArea
+            onContainsMouseChanged: {
+                if (!containsMouse) {
                     topBarCore.gapEnterSuppressed = false;
                 } else if (barWindow.clickThroughEnabled && !topBarCore.reveal) {
                     topBarCore.gapEnterSuppressed = true;
                 }
                 topBarCore.evaluateReveal();
             }
-        }
-
-        MouseArea {
-            id: topBarMouseArea
-            y: !barWindow.isVertical ? (barPos === SettingsData.Position.Bottom ? parent.height - height : 0) : 0
-            x: barWindow.isVertical ? (barPos === SettingsData.Position.Right ? parent.width - width : 0) : 0
-            height: !barWindow.isVertical ? Theme.px(barWindow.effectiveBarThickness + barWindow.effectiveSpacing, barWindow._dpr) : undefined
-            width: barWindow.isVertical ? Theme.px(barWindow.effectiveBarThickness + barWindow.effectiveSpacing, barWindow._dpr) : undefined
-            anchors {
-                left: !barWindow.isVertical ? parent.left : (barPos === SettingsData.Position.Left ? parent.left : undefined)
-                right: !barWindow.isVertical ? parent.right : (barPos === SettingsData.Position.Right ? parent.right : undefined)
-                top: barWindow.isVertical ? parent.top : undefined
-                bottom: barWindow.isVertical ? parent.bottom : undefined
-            }
+            // Switching stretch anchors can leave stale dimensions after an orientation change
+            x: barWindow.isIsland ? 0 : !barWindow.isVertical ? barWindow.taskbarStartInset : barPos === SettingsData.Position.Right ? parent.width - width : 0
+            y: barWindow.isIsland ? 0 : barWindow.isVertical ? barWindow.taskbarStartInset : barPos === SettingsData.Position.Bottom ? parent.height - height : 0
+            width: barWindow.isIsland ? parent.width : barWindow.isVertical ? Theme.px(barWindow.effectiveBarThickness + barWindow.surfaceSpacing, barWindow._dpr) : Math.max(0, parent.width - barWindow.taskbarStartInset - barWindow.taskbarEndInset)
+            height: barWindow.isIsland ? parent.height : !barWindow.isVertical ? Theme.px(barWindow.effectiveBarThickness + barWindow.surfaceSpacing, barWindow._dpr) : Math.max(0, parent.height - barWindow.taskbarStartInset - barWindow.taskbarEndInset)
             readonly property bool inOverview: CompositorService.overviewActiveOnScreen(barWindow.screenName) && barWindow.effectiveOpenOnOverview
-            hoverEnabled: (barConfig?.autoHide ?? false) && !inOverview && !topBarCore.popoutPinsReveal
-            acceptedButtons: barWindow.clickThroughEnabled ? Qt.NoButton : Qt.RightButton
-            enabled: !inOverview && ((barConfig?.autoHide ?? false) || !barWindow.clickThroughEnabled)
+            hoverEnabled: topBarCore.autoHide && !inOverview && !topBarCore.popoutPinsReveal
+            acceptedButtons: barWindow.clickThroughEnabled || barWindow.isIsland ? Qt.NoButton : Qt.RightButton
+            enabled: !inOverview && (topBarCore.autoHide || !barWindow.clickThroughEnabled)
             onPositionChanged: mouse => {
                 if (!topBarCore.gapEnterSuppressed)
                     return;
@@ -1100,10 +985,13 @@ Item {
 
                 transform: Translate {
                     id: topBarSlide
-                    x: barWindow.isVertical ? Theme.snap(topBarCore.reveal ? 0 : (barPos === SettingsData.Position.Right ? barWindow.surfaceImplicitWidth : -barWindow.surfaceImplicitWidth), barWindow._dpr) : 0
-                    y: !barWindow.isVertical ? Theme.snap(topBarCore.reveal ? 0 : (barPos === SettingsData.Position.Bottom ? barWindow.surfaceImplicitHeight : -barWindow.surfaceImplicitHeight), barWindow._dpr) : 0
+                    x: barWindow.isVertical ? Theme.snap(topBarCore.reveal ? 0 : (barPos === SettingsData.Position.Right ? barWindow.hideSlideThickness : -barWindow.hideSlideThickness), barWindow._dpr) : 0
+                    y: !barWindow.isVertical ? Theme.snap(topBarCore.reveal ? 0 : (barPos === SettingsData.Position.Bottom ? barWindow.hideSlideThickness : -barWindow.hideSlideThickness), barWindow._dpr) : 0
+                    onXChanged: barWindow.refreshBlurRegion()
+                    onYChanged: barWindow.refreshBlurRegion()
 
                     Behavior on x {
+                        enabled: !SettingsData.reduceMotion
                         NumberAnimation {
                             duration: Theme.shortDuration
                             easing.type: Easing.OutCubic
@@ -1111,6 +999,7 @@ Item {
                     }
 
                     Behavior on y {
+                        enabled: !SettingsData.reduceMotion
                         NumberAnimation {
                             duration: Theme.shortDuration
                             easing.type: Easing.OutCubic
@@ -1120,19 +1009,63 @@ Item {
 
                 Item {
                     id: barUnitInset
-                    property int spacingPx: Theme.px(barWindow.effectiveSpacing, barWindow._dpr)
-                    property int lengthPaddingPx: Theme.px(barWindow.effectiveBarLengthPadding, barWindow._dpr)
+                    property int spacingPx: Theme.px(barWindow.renderedSpacing, barWindow._dpr)
+                    readonly property int islandBandPx: Theme.px(barWindow.islandStripThickness, barWindow._dpr)
                     anchors.fill: parent
-                    anchors.leftMargin: !barWindow.isVertical ? spacingPx + lengthPaddingPx : (axis.edge === "left" ? spacingPx : 0)
-                    anchors.rightMargin: !barWindow.isVertical ? spacingPx + lengthPaddingPx : (axis.edge === "right" ? spacingPx : 0)
-                    anchors.topMargin: barWindow.isVertical ? (barWindow.hasAdjacentTopBar ? 0 : spacingPx) + lengthPaddingPx : (axis.outerVisualEdge() === "bottom" ? 0 : spacingPx)
-                    anchors.bottomMargin: barWindow.isVertical ? (barWindow.hasAdjacentBottomBar ? 0 : spacingPx) + lengthPaddingPx : (axis.outerVisualEdge() === "bottom" ? spacingPx : 0)
+                    anchors.leftMargin: barWindow.isIsland ? (barWindow.isVertical ? (axis.edge === "left" ? 0 : parent.width - islandBandPx) : barWindow.taskbarStartInset) : !barWindow.isVertical ? spacingPx + barWindow.lengthPaddingStartPx : (axis.edge === "left" ? spacingPx : 0)
+                    anchors.rightMargin: barWindow.isIsland ? (barWindow.isVertical ? (axis.edge === "right" ? 0 : parent.width - islandBandPx) : barWindow.taskbarEndInset) : !barWindow.isVertical ? spacingPx + barWindow.lengthPaddingEndPx : (axis.edge === "right" ? spacingPx : 0)
+                    anchors.topMargin: barWindow.isIsland ? (barWindow.isVertical ? barWindow.taskbarStartInset : (axis.edge === "top" ? 0 : parent.height - islandBandPx)) : barWindow.isVertical ? (barWindow.hasAdjacentTopBar ? 0 : spacingPx) + barWindow.lengthPaddingStartPx : (axis.outerVisualEdge() === "bottom" ? 0 : spacingPx)
+                    anchors.bottomMargin: barWindow.isIsland ? (barWindow.isVertical ? barWindow.taskbarEndInset : (axis.edge === "bottom" ? 0 : parent.height - islandBandPx)) : barWindow.isVertical ? (barWindow.hasAdjacentBottomBar ? 0 : spacingPx) + barWindow.lengthPaddingEndPx : (axis.outerVisualEdge() === "bottom" ? spacingPx : 0)
+                    onXChanged: barWindow.refreshBlurRegion()
+                    onYChanged: barWindow.refreshBlurRegion()
+                    onWidthChanged: barWindow.refreshBlurRegion()
+                    onHeightChanged: barWindow.refreshBlurRegion()
 
-                    BarCanvas {
+                    BarSurface {
                         id: barBackground
                         barWindow: barWindow
                         axis: axis
                         barConfig: barWindow.renderBarConfig
+                        visible: !frameShapesBar && !barWindow.isIsland
+                        onGothEnabledChanged: _blurRebuildTimer.restart()
+                        onWingChanged: barWindow.refreshBlurRegion()
+                        onMotionRunningChanged: {
+                            if (!motionRunning)
+                                barWindow.refreshBlurRegion();
+                        }
+                    }
+
+                    SectionSurface {
+                        id: leadingSatelliteSurface
+                        visible: barWindow.islandSatelliteBackground && barWindow.islandSatellitesEnabled && alongSize > 0
+                        alongPos: barWindow.isVertical ? topBarContent.y + (barWindow._leftSection?.y ?? 0) : topBarContent.x + (barWindow._leftSection?.x ?? 0)
+                        alongSize: barWindow.leadingSectionSize
+                        alongExtent: barWindow.isVertical ? barUnitInset.height : barUnitInset.width
+                        crossSize: barWindow.isVertical ? barUnitInset.width : barUnitInset.height
+                        isVertical: barWindow.isVertical
+                        crossFar: axis.edge === "bottom" || axis.edge === "right"
+                        edgeAligned: !barWindow.islandSatellitesHugIsland
+                        pad: barWindow.islandChromePad
+                        sweep: barWindow.isIsland ? SettingsData.islandSetting(barConfig, "islandSatelliteSwoopRadius") : 0
+                        gothEnabled: barWindow.isIsland && SettingsData.islandSetting(barConfig, "islandSatelliteGothCorners")
+                        fillColor: Theme.withAlpha(barWindow.islandSurfaceColor, barWindow.islandSatelliteOpacity)
+                    }
+
+                    SectionSurface {
+                        id: trailingSatelliteSurface
+                        visible: barWindow.islandSatelliteBackground && barWindow.islandSatellitesEnabled && alongSize > 0
+                        trailing: true
+                        alongPos: barWindow.isVertical ? topBarContent.y + (barWindow._rightSection?.y ?? 0) : topBarContent.x + (barWindow._rightSection?.x ?? 0)
+                        alongSize: barWindow.trailingSectionSize
+                        alongExtent: barWindow.isVertical ? barUnitInset.height : barUnitInset.width
+                        crossSize: barWindow.isVertical ? barUnitInset.width : barUnitInset.height
+                        isVertical: barWindow.isVertical
+                        crossFar: axis.edge === "bottom" || axis.edge === "right"
+                        edgeAligned: !barWindow.islandSatellitesHugIsland
+                        pad: barWindow.islandChromePad
+                        sweep: barWindow.isIsland ? SettingsData.islandSetting(barConfig, "islandSatelliteSwoopRadius") : 0
+                        gothEnabled: barWindow.isIsland && SettingsData.islandSetting(barConfig, "islandSatelliteGothCorners")
+                        fillColor: Theme.withAlpha(barWindow.islandSurfaceColor, barWindow.islandSatelliteOpacity)
                     }
 
                     MouseArea {
@@ -1147,11 +1080,39 @@ Item {
                         anchors.fill: parent
                         propagateComposedEvents: true
                         z: -1
-                        scrollEnabled: barConfig?.scrollEnabled ?? true
-                        xBehavior: barConfig?.scrollXBehavior ?? "column"
-                        yBehavior: barConfig?.scrollYBehavior ?? "workspace"
+                        scrollEnabled: barWindow.barConfig?.scrollEnabled ?? true
+                        xBehavior: barWindow.barConfig?.scrollXBehavior ?? "column"
+                        yBehavior: barWindow.barConfig?.scrollYBehavior ?? "workspace"
                         screenName: barWindow.screenName
+                        barConfig: barWindow.barConfig
+                        wheelFilter: barWindow.islandHost && barWindow.islandHost.filterStripWheel ? wheel => barWindow.islandHost.filterStripWheel(wheel, scrollArea) : null
                         onWorkspaceSwitchRequested: direction => topBarContent.switchWorkspace(direction)
+                    }
+
+                    MouseArea {
+                        id: islandLeadingArea
+
+                        x: 0
+                        y: 0
+                        width: barWindow.isVertical ? parent.width : Math.max(0, barWindow.islandVisualAlongStart)
+                        height: barWindow.isVertical ? Math.max(0, barWindow.islandVisualAlongStart) : parent.height
+                        z: -0.5
+                        acceptedButtons: Qt.RightButton
+                        enabled: barWindow.islandStripAreasActive
+                        onClicked: Quickshell.execDetached(["dms", "ipc", "call", "osk", "movie"])
+                    }
+
+                    MouseArea {
+                        id: islandTrailingArea
+
+                        x: barWindow.isVertical ? 0 : barWindow.islandVisualAlongEnd
+                        y: barWindow.isVertical ? barWindow.islandVisualAlongEnd : 0
+                        width: barWindow.isVertical ? parent.width : Math.max(0, parent.width - barWindow.islandVisualAlongEnd)
+                        height: barWindow.isVertical ? Math.max(0, parent.height - barWindow.islandVisualAlongEnd) : parent.height
+                        z: -0.5
+                        acceptedButtons: Qt.RightButton
+                        enabled: barWindow.islandStripAreasActive
+                        onClicked: MprisController.next()
                     }
 
                     DankBarContent {
@@ -1160,16 +1121,64 @@ Item {
                         rootWindow: barWindow.rootWindow
                         barConfig: barWindow.barConfig
                         leftWidgetsModel: barWindow.leftWidgetsModel
-                        centerWidgetsModel: barWindow.centerWidgetsModel
+                        centerWidgetsModel: barWindow.isIsland ? null : barWindow.centerWidgetsModel
                         rightWidgetsModel: barWindow.rightWidgetsModel
+                        visible: barWindow.islandSatellitesEnabled
+                        leadingSectionOffset: barWindow.islandLeadingOffset
+                        trailingSectionOffset: barWindow.islandTrailingOffset
                     }
 
                     // Passive: tracks cursor without intercepting clicks or scroll
                     HoverHandler {
                         id: hoverPopoutHandler
                         enabled: (barConfig?.hoverPopouts ?? false) && !barWindow.clickThroughEnabled
-                        onPointChanged: topBarContent.queueHoverFromItem(barUnitInset, point)
-                        onHoveredChanged: topBarContent.updateHoverBarHovered(hovered)
+
+                        property real lastGlobalX: 0
+                        property real lastGlobalY: 0
+
+                        onPointChanged: {
+                            const gp = topBarContent.surfaceContext.screenPoint(barUnitInset, point.position.x, point.position.y);
+                            lastGlobalX = gp.x;
+                            lastGlobalY = gp.y;
+                            topBarContent.queueHoverPopout(gp.x, gp.y);
+                        }
+
+                        onHoveredChanged: {
+                            topBarContent.updateHoverBarHovered(hovered);
+                        }
+                    }
+                }
+
+                Loader {
+                    id: islandLoader
+                    anchors.fill: parent
+                    active: barWindow.hostsIsland && !barWindow.islandFree
+
+                    // Band-sized and empty until the island loads; Qt's pointer-clip cache is already set by then.
+                    PointerOverflowMarker {}
+
+                    sourceComponent: IslandBarHost {
+                        barConfig: barWindow.barConfig
+                        screen: barWindow.screen
+                        hostWindow: barWindow.hostWindow
+                        barId: barWindow._barId
+                        originOffsetX: topBarMouseArea.x + islandLoader.x
+                        originOffsetY: topBarMouseArea.y + islandLoader.y
+                        hostOffsetX: barWindow.hostOffsetX
+                        hostOffsetY: barWindow.hostOffsetY
+                        chrome: barWindow.islandChromeMode
+                        frameHosted: barWindow.frameHosted
+                        anchorItem: topBarContainer
+                        slotItem: barWindow.islandSlot
+                        barBody: barWindow
+                        bandThickness: barWindow.isVertical ? topBarMouseArea.width : topBarMouseArea.height
+                        bandAlongStart: barWindow.isVertical ? barUnitInset.y : barUnitInset.x
+                        bandAlongEnd: barWindow.isVertical ? barUnitInset.y + barUnitInset.height : barUnitInset.x + barUnitInset.width
+                        bandColor: barWindow._bgColor
+                        leadingSectionRect: barWindow.leadingSectionRect
+                        centerSectionRect: barWindow.centerSectionRect
+                        trailingSectionRect: barWindow.trailingSectionRect
+                        onScrollWheel: wheel => scrollArea.processWheel(wheel)
                     }
                 }
             }

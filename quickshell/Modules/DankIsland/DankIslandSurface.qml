@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 
+import qs.Modules.SurfaceWidgets
 import QtQuick
 import Quickshell
 import qs.Common
@@ -17,7 +18,6 @@ Item {
     required property var notificationModel
     required property var launcherController
     property var launcherTransientSurfaceTracker: null
-    property var notificationTransientSurfaceTracker: null
     property var effectiveScreen: null
     property bool reducedMotion: false
     property real springStiffness: 560
@@ -28,6 +28,35 @@ Item {
     property string palette: "default"
     property bool highContrast: false
     property real transparency: 1
+    property color surfaceBase: Theme.hostSurface
+    property string requestedWindow: ""
+    property bool freeMode: false
+    property bool anchorSnaps: false
+    property real anchorX: 0
+    property real anchorY: 0
+    property real freeMargin: 8
+    // Measured from the band centre, not the band start.
+    property real anchorAlong: 0
+    property real nearInset: 0
+    property real bandAlongStart: 0
+    property real bandAlongEnd: root.alongExtent
+    // Hosted: false while the bar window is still band sized, so the sheet never starts inside a window that clips it.
+    property bool hostReady: true
+    property bool targetPending: false
+    onHostReadyChanged: {
+        if (!root.hostReady || !root.targetPending)
+            return;
+        root.targetPending = false;
+        root.applyTarget();
+    }
+    property Component compactFaceOverride: null
+    // "own" paints the palette; "band" wears the host bar's colour with join corners; "none" paints nothing and leaves the silhouette to the frame SDF.
+    property string chrome: "own"
+    property color bandColor: Theme.hostSurface
+    property bool compactBackground: false
+    property color compactBackgroundColor: "transparent"
+    readonly property bool embedded: root.chrome !== "own"
+    readonly property bool chromeless: root.chrome === "none"
 
     readonly property color surfaceColor: {
         if (root.highContrast)
@@ -38,11 +67,11 @@ Item {
         case "dim":
             return Theme.surfaceDim;
         }
-        return Theme.surfaceContainerHigh;
+        return root.surfaceBase;
     }
     readonly property bool popupStyled: root.controller.expanded
     readonly property real islandOpacity: Math.max(0, Math.min(1, root.transparency))
-    readonly property color effectiveSurfaceColor: root.highContrast ? Theme.surfaceContainerHighest : Theme.withAlpha(root.surfaceColor, root.islandOpacity)
+    readonly property color effectiveSurfaceColor: root.embedded ? root.bandColor : root.highContrast ? Theme.surfaceContainerHighest : Theme.withAlpha(root.surfaceColor, root.islandOpacity)
     readonly property real surfaceOpacity: root.effectiveSurfaceColor.a
     readonly property real currentSurfaceRadius: Math.max(0, motion.currentTopLeftRadius, motion.currentBottomLeftRadius)
     readonly property color notificationAccentColor: {
@@ -59,7 +88,17 @@ Item {
 
     readonly property alias inputMaskItem: inputEnvelope
     readonly property alias fittsStripItem: fittsStrip
+    readonly property alias surfaceMotion: motion
     readonly property bool motionRunning: motion.running
+    onMotionRunningChanged: {
+        if (!motionRunning && requestedWindow)
+            openWindow.restart();
+        if (motionRunning) {
+            motionStartBounds = Qt.rect(currentVisualX, currentVisualY, currentVisualWidth, currentVisualHeight);
+            return;
+        }
+        controller.releaseIdleVisuals();
+    }
     readonly property real springTimeConstantMs: motion.timeConstantMs
     property real trackedCrossExtent: 0
     property real fadeCompactCross: 48
@@ -83,6 +122,8 @@ Item {
     readonly property real targetScreenX: targetVisualX + root.hostOriginX
     readonly property real targetScreenY: targetVisualY + root.hostOriginY
     readonly property real targetVisualWidth: motion.targetWidth
+    readonly property real currentScreenX: currentVisualX + root.hostOriginX
+    readonly property real currentScreenY: currentVisualY + root.hostOriginY
     readonly property real targetVisualHeight: motion.targetHeight
     readonly property real currentVisualAlong: isVertical ? motion.currentHeight : motion.currentWidth
     readonly property real targetVisualAlong: isVertical ? motion.targetHeight : motion.targetWidth
@@ -93,6 +134,46 @@ Item {
         return Math.max(0, Math.min(1, (currentVisualCross - fadeCompactCross) / span));
     }
 
+    readonly property QtObject resizeGeometry: QtObject {
+        readonly property real renderedX: root.currentScreenX
+        readonly property real renderedY: root.currentScreenY
+
+        function screenXFor(width) {
+            if (!root.isVertical)
+                return Math.round((root.alongExtent - width) / 2 + (root.embedded ? root.clampAnchored(root.controller.alongOffset + root.anchorAlong, width) : motion.targetOffsetAlong)) + root.hostOriginX;
+            const cross = Math.round(motion.targetOffsetCross);
+            return (root.farEdge ? root.crossExtent - cross - width : cross) + root.hostOriginX;
+        }
+    }
+
+    function openAfterCollapse(windowName) {
+        requestedWindow = windowName;
+        controller.requestCollapse();
+        openWindow.restart();
+    }
+
+    DeferredAction {
+        id: openWindow
+
+        onTriggered: {
+            if (root.motionRunning || root.controller.expanded)
+                return;
+            const requested = root.requestedWindow;
+            root.requestedWindow = "";
+            switch (requested) {
+            case "settings":
+                PopoutService.focusOrToggleSettings();
+                break;
+            case "accounts":
+                PopoutService.openSettingsWithTab("user_accounts");
+                break;
+            case "colorPicker":
+                PopoutService.showColorPicker();
+                break;
+            }
+        }
+    }
+
     function descriptorCross(target) {
         return root.isVertical ? target.width : target.height;
     }
@@ -101,17 +182,77 @@ Item {
         return root.isVertical ? target.height : target.width;
     }
 
-    function applyTarget() {
+    // Free mode re-centres the target on the anchor and clamps it on screen, so the centre glides
+    // between the compact and expanded positions instead of pinning the top-left corner.
+    function clampFree(value, size, extent) {
+        const limit = extent - size - root.freeMargin;
+        if (limit <= root.freeMargin)
+            return Math.round((extent - size) / 2);
+        return Math.round(Math.max(root.freeMargin, Math.min(value, limit)));
+    }
+
+    // A compact face keeps its slot right up to the band edge; only a sheet that outgrows the slot keeps a margin.
+    function clampAnchored(offset, size) {
+        const margin = size > root.descriptorAlong(root.controller.compactTarget) ? Theme.spacingS : 0;
+        const centre = root.alongExtent / 2;
+        const low = root.bandAlongStart + margin + size / 2 - centre;
+        const high = root.bandAlongEnd - margin - size / 2 - centre;
+        return low > high ? (root.bandAlongStart + root.bandAlongEnd) / 2 - centre : Math.max(low, Math.min(offset, high));
+    }
+
+    function resolveTarget(target) {
+        if (root.embedded && !root.freeMode) {
+            const inset = target.sheet ? root.nearInset : 0;
+            return Object.assign({}, target, {
+                "offsetAlong": root.clampAnchored(target.offsetAlong + root.anchorAlong, root.descriptorAlong(target)),
+                "width": target.width + (root.isVertical ? inset : 0),
+                "height": target.height + (root.isVertical ? 0 : inset)
+            });
+        }
+        if (!root.freeMode)
+            return target;
+        const x = root.clampFree(root.anchorX - target.width / 2, target.width, root.width);
+        const y = root.clampFree(root.anchorY - target.height / 2, target.height, root.height);
+        return Object.assign({}, target, {
+            "offsetAlong": root.isVertical ? y + target.height / 2 - root.height / 2 : x + target.width / 2 - root.width / 2,
+            "offsetCross": root.isVertical ? x : y
+        });
+    }
+
+    function applyTarget(seedVelocity) {
+        root.targetPending = controller.expanded && !root.hostReady;
+        if (root.targetPending)
+            return;
         if (controller.expanded)
-            fadeExpandedCross = root.descriptorCross(controller.expandedTarget);
+            fadeExpandedCross = root.descriptorCross(root.resolveTarget(controller.expandedTarget));
         else
             fadeCompactCross = root.descriptorCross(controller.compactTarget);
         if (motion.running)
             root.unionMotionStartBounds();
-        motion.setTarget(controller.targetDescriptor);
+        motion.setTarget(root.resolveTarget(controller.targetDescriptor), seedVelocity);
         if (!motion.running)
             root.controller.releaseIdleVisuals();
     }
+
+    // Neighbours re-layout without animation, so a settled collapsed pill snaps with them; a size change or an open sheet springs.
+    function syncAnchor() {
+        if (!root.freeMode && !root.embedded)
+            return;
+        const target = root.resolveTarget(controller.targetDescriptor);
+        const sameSize = target.width === motion.targetWidth && target.height === motion.targetHeight;
+        if (root.anchorSnaps || (root.embedded && !motion.running && !controller.expanded && sameSize)) {
+            motion.snapTo(target);
+            return;
+        }
+        root.applyTarget();
+    }
+
+    onAnchorXChanged: root.syncAnchor()
+    onAnchorYChanged: root.syncAnchor()
+    onAnchorAlongChanged: root.syncAnchor()
+    onAlongExtentChanged: root.syncAnchor()
+    onBandAlongStartChanged: root.syncAnchor()
+    onBandAlongEndChanged: root.syncAnchor()
 
     function unionMotionStartBounds() {
         const b = root.motionStartBounds;
@@ -129,8 +270,8 @@ Item {
     Component.onCompleted: {
         trackedCrossExtent = crossExtent;
         fadeCompactCross = root.descriptorCross(controller.compactTarget);
-        fadeExpandedCross = root.descriptorCross(controller.expandedTarget);
-        motion.snapTo(controller.targetDescriptor);
+        fadeExpandedCross = root.descriptorCross(root.resolveTarget(controller.expandedTarget));
+        motion.snapTo(root.resolveTarget(controller.targetDescriptor));
     }
 
     // On a far edge the cross coordinate is measured from the far side, so a host resize
@@ -138,6 +279,10 @@ Item {
     onCrossExtentChanged: {
         const delta = crossExtent - trackedCrossExtent;
         trackedCrossExtent = crossExtent;
+        if (root.freeMode) {
+            root.syncAnchor();
+            return;
+        }
         if (!farEdge || !motion.running || delta === 0)
             return;
         const b = motionStartBounds;
@@ -150,17 +295,12 @@ Item {
         function onTargetDescriptorChanged() {
             root.applyTarget();
         }
-    }
 
-    Connections {
-        target: motion
-
-        function onRunningChanged() {
-            if (motion.running) {
-                root.motionStartBounds = Qt.rect(root.currentVisualX, root.currentVisualY, root.currentVisualWidth, root.currentVisualHeight);
+        function onExpandedChanged() {
+            if (!root.controller.expanded)
                 return;
-            }
-            root.controller.releaseIdleVisuals();
+            openWindow.cancel();
+            root.requestedWindow = "";
         }
     }
 
@@ -172,6 +312,9 @@ Item {
         damping: root.springDamping
         mass: root.springMass
     }
+
+    // Host and surface are band-sized when embedded; the sheet grows past them after the pill was hovered at rest.
+    PointerOverflowMarker {}
 
     // Frozen start/target union so the Wayland mask is not rewritten every spring frame.
     Item {
@@ -197,19 +340,17 @@ Item {
         height: (motion.running ? Math.max(root.motionStartBounds.y + root.motionStartBounds.height, root.targetVisualY + motion.targetHeight) : root.targetVisualY + motion.targetHeight) + overshootBudget - y
     }
 
-    Rectangle {
+    MorphSurface {
         id: island
+        motion: root.surfaceMotion
 
         x: root.currentVisualX
         y: root.currentVisualY
         width: root.currentVisualWidth
         height: root.currentVisualHeight
-        topLeftRadius: Math.max(0, motion.currentTopLeftRadius)
-        topRightRadius: Math.max(0, motion.currentTopRightRadius)
-        bottomLeftRadius: Math.max(0, motion.currentBottomLeftRadius)
-        bottomRightRadius: Math.max(0, motion.currentBottomRightRadius)
-        color: root.effectiveSurfaceColor
-        border.width: root.notificationAccentColor !== "transparent" ? 1.5 : (root.highContrast ? 2 : (root.popupStyled ? BlurService.borderWidth : 0))
+        // Embedded, the band already paints the in-band strip; overhangFill draws the rest, so a translucent band never double-alphas.
+        color: root.embedded ? "transparent" : root.effectiveSurfaceColor
+        border.width: root.notificationAccentColor !== "transparent" ? 1.5 : root.embedded ? 0 : (root.highContrast ? 2 : (root.popupStyled ? BlurService.borderWidth : 0))
         border.color: root.notificationAccentColor !== "transparent" ? root.notificationAccentColor : (root.highContrast ? Theme.outlineStrong : (root.popupStyled ? BlurService.borderColor : "transparent"))
 
         Behavior on color {
@@ -226,6 +367,17 @@ Item {
             }
         }
 
+        Rectangle {
+            anchors.fill: parent
+            visible: root.compactBackground && opacity > 0
+            opacity: 1 - root.morphProgress
+            color: root.compactBackgroundColor
+            topLeftRadius: parent.topLeftRadius
+            topRightRadius: parent.topRightRadius
+            bottomLeftRadius: parent.bottomLeftRadius
+            bottomRightRadius: parent.bottomRightRadius
+        }
+
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
@@ -235,6 +387,7 @@ Item {
                     Quickshell.execDetached(["dms", "ipc", "call", "osk", "toggle"]);
                     return;
                 }
+                SettingsData.recordBarInteraction(root.effectiveScreen, root.controller.barConfig?.id);
                 root.controller.requestToggle(true);
             }
             onWheel: wheel => {
@@ -251,6 +404,10 @@ Item {
             id: contentHost
 
             controller: root.controller
+            freeMode: root.freeMode
+            compactFaceOverride: root.compactFaceOverride
+            resolveTarget: target => root.resolveTarget(target)
+            expandedInset: root.embedded && !root.freeMode ? root.nearInset : 0
             islandX: root.currentVisualX
             islandY: root.currentVisualY
             hostWidth: root.width
@@ -278,6 +435,8 @@ Item {
             notificationExpandedComponent: expandedNotificationComponent
             notificationCenterCompactComponent: compactNotificationCenterComponent
             notificationCenterExpandedComponent: expandedNotificationCenterComponent
+            clipboardCompactComponent: compactClipboardComponent
+            clipboardExpandedComponent: expandedClipboardComponent
         }
 
         HoverHandler {
@@ -307,7 +466,7 @@ Item {
         y: root.isVertical ? alongPos : crossPos
         width: root.isVertical ? edgeGap : span
         height: root.isVertical ? span : edgeGap
-        visible: edgeGap > 0 && span > 0
+        visible: !root.freeMode && !root.embedded && edgeGap > 0 && span > 0
 
         HoverHandler {
             id: stripHover
@@ -318,10 +477,61 @@ Item {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
-            onClicked: root.controller.requestToggle(true)
+            onClicked: {
+                SettingsData.recordBarInteraction(root.effectiveScreen, root.controller.barConfig?.id);
+                root.controller.requestToggle(true);
+            }
             onWheel: wheel => {
                 root.scrollWheel(wheel);
                 wheel.accepted = true;
+            }
+        }
+    }
+
+    // crossExtent is the band here, so the overhang is how far the sheet has left the bar.
+    readonly property real embeddedOverhang: !root.embedded || root.chromeless ? 0 : Math.max(0, root.farEdge ? -(root.isVertical ? root.currentVisualX : root.currentVisualY) : (root.isVertical ? root.currentVisualX + root.currentVisualWidth : root.currentVisualY + root.currentVisualHeight) - root.crossExtent)
+    readonly property real embeddedJoinRadius: Math.min(Theme.connectedCornerRadius, root.embeddedOverhang)
+
+    // A Loader, not visible:, so islands and dots skip these per-frame motion bindings.
+    Loader {
+        active: root.embedded && !root.chromeless
+        z: island.z - 1
+        sourceComponent: Item {
+            id: overhangChrome
+            Item {
+                id: overhangClip
+
+                visible: root.embeddedOverhang > 0
+                clip: true
+                x: root.isVertical ? (root.farEdge ? -root.embeddedOverhang : root.crossExtent) : 0
+                y: root.isVertical ? 0 : (root.farEdge ? -root.embeddedOverhang : root.crossExtent)
+                width: root.isVertical ? root.embeddedOverhang : root.width
+                height: root.isVertical ? root.height : root.embeddedOverhang
+
+                MorphSurface {
+                    motion: root.surfaceMotion
+                    x: root.currentVisualX - overhangClip.x
+                    y: root.currentVisualY - overhangClip.y
+                    color: root.effectiveSurfaceColor
+                }
+            }
+
+            GothCorner {
+                visible: root.embeddedJoinRadius > 0
+                radius: root.embeddedJoinRadius
+                color: root.effectiveSurfaceColor
+                corner: root.isVertical ? (root.farEdge ? "topLeft" : "topRight") : (root.farEdge ? "topLeft" : "bottomLeft")
+                x: root.isVertical ? (root.farEdge ? -radius : root.crossExtent) : root.currentVisualX - radius
+                y: root.isVertical ? root.currentVisualY - radius : (root.farEdge ? -radius : root.crossExtent)
+            }
+
+            GothCorner {
+                visible: root.embeddedJoinRadius > 0
+                radius: root.embeddedJoinRadius
+                color: root.effectiveSurfaceColor
+                corner: root.isVertical ? (root.farEdge ? "bottomLeft" : "bottomRight") : (root.farEdge ? "topRight" : "bottomRight")
+                x: root.isVertical ? (root.farEdge ? -radius : root.crossExtent) : root.currentVisualX + root.currentVisualWidth
+                y: root.isVertical ? root.currentVisualY + root.currentVisualHeight : (root.farEdge ? -radius : root.crossExtent)
             }
         }
     }
@@ -340,6 +550,7 @@ Item {
 
         HomeExpanded {
             controller: root.controller
+            resizeGeometry: root.resizeGeometry
         }
     }
 
@@ -357,6 +568,7 @@ Item {
 
         MediaExpanded {
             controller: root.controller
+            resizeGeometry: root.resizeGeometry
         }
     }
 
@@ -366,20 +578,25 @@ Item {
         DestinationCompact {
             id: launcherFace
 
-            readonly property real logoSize: Math.max(12, Theme.iconSizeSmall + SettingsData.launcherLogoSizeOffset)
-            readonly property color logoColor: Theme.effectiveLogoColor !== "" ? Theme.effectiveLogoColor : Theme.surfaceText
+            readonly property var launcherEntry: SettingsData.barWidgetEntry(root.controller.barConfig, "launcherButton")
+
+            function opt(key) {
+                return SettingsData.widgetOption("launcherButton", launcherFace.launcherEntry, key);
+            }
 
             controller: root.controller
             activityId: "launcher"
             label: I18n.tr("Launcher", "island compact face: launcher label")
             leading: LauncherLogo {
-                mode: SettingsData.launcherLogoMode
-                size: launcherFace.logoSize
-                appsIconColor: launcherFace.logoColor
-                colorOverride: String(launcherFace.logoColor)
-                brightness: SettingsData.launcherLogoBrightness
-                contrast: SettingsData.launcherLogoContrast
-                customPath: SettingsData.launcherLogoCustomPath
+                id: faceLogo
+
+                mode: launcherFace.opt("launcherLogoMode")
+                size: Math.max(12, Theme.iconSizeSmall + launcherFace.opt("launcherLogoSizeOffset"))
+                appsIconColor: faceLogo.resolvedColor
+                colorOverride: launcherFace.opt("launcherLogoColorOverride") || "surface"
+                brightness: launcherFace.opt("launcherLogoBrightness")
+                contrast: launcherFace.opt("launcherLogoContrast")
+                customPath: launcherFace.opt("launcherLogoCustomPath")
                 fallbackToApps: true
             }
         }
@@ -414,11 +631,13 @@ Item {
 
         ControlCenterExpanded {
             controller: root.controller
+            onWindowRequested: windowName => root.openAfterCollapse(windowName)
             effectiveScreen: root.effectiveScreen
             alignedX: root.targetScreenX
             alignedY: root.targetScreenY
             alignedWidth: root.targetVisualWidth
             alignedHeight: root.targetVisualHeight
+            resizeGeometry: root.resizeGeometry
         }
     }
 
@@ -438,6 +657,7 @@ Item {
 
         WallpaperExpanded {
             controller: root.controller
+            resizeGeometry: root.resizeGeometry
             effectiveScreen: root.effectiveScreen
         }
     }
@@ -458,6 +678,7 @@ Item {
 
         WeatherExpanded {
             controller: root.controller
+            resizeGeometry: root.resizeGeometry
         }
     }
 
@@ -510,8 +731,30 @@ Item {
 
         NotificationCenterExpanded {
             controller: root.controller
+            resizeGeometry: root.resizeGeometry
+        }
+    }
+
+    Component {
+        id: compactClipboardComponent
+
+        DestinationCompact {
+            controller: root.controller
+            activityId: "clipboard"
+            iconName: "content_paste"
+            label: I18n.tr("Clipboard")
+        }
+    }
+
+    Component {
+        id: expandedClipboardComponent
+
+        ClipboardExpanded {
+            controller: root.controller
+            transientSurfaceTracker: root.launcherTransientSurfaceTracker
             effectiveScreen: root.effectiveScreen
-            transientSurfaceTracker: root.notificationTransientSurfaceTracker
+            alignedX: root.targetScreenX
+            alignedY: root.targetScreenY
         }
     }
 

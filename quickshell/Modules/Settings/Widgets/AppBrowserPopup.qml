@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell
 import qs.Common
 import qs.Widgets
 
@@ -19,8 +18,8 @@ DankFloatingWindow {
     objectName: "appBrowserPopup"
     title: I18n.tr("Select Application")
     minimumSize: Qt.size(400, 350)
-    implicitWidth: 500
-    implicitHeight: 550
+    implicitWidth: SettingsMetrics.windowMinWidth
+    implicitHeight: SettingsMetrics.windowMinWidth + Theme.spacingXL * 2
     visible: false
 
     onClosed: hide()
@@ -59,75 +58,28 @@ DankFloatingWindow {
             anchors.fill: parent
             spacing: 0
 
-            Item {
+            DankWindowHeader {
+                id: titleBar
                 width: parent.width
-                height: 48
-
-                MouseArea {
-                    anchors.fill: parent
-                    onPressed: windowControls.tryStartMove()
-                }
-
-                Rectangle {
-                    anchors.fill: parent
-                    color: Theme.floatingWindowSurface
-                }
-
-                Row {
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.spacingL
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Theme.spacingM
-
-                    DankIcon {
-                        name: "add_circle"
-                        size: Theme.iconSize
-                        color: Theme.primary
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-
-                    StyledText {
-                        text: I18n.tr("Select Application")
-                        font.pixelSize: Theme.fontSizeXLarge
-                        color: Theme.surfaceText
-                        font.weight: Font.Medium
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
-
-                Row {
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.spacingM
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Theme.spacingXS
-
-                    DankActionButton {
-                        iconName: "close"
-                        iconSize: Theme.iconSize - 4
-                        iconColor: Theme.surfaceText
-                        onClicked: root.hide()
-                    }
-                }
+                controls: windowControls
+                title: I18n.tr("Select Application")
+                onCloseRequested: root.hide()
             }
 
             Item {
                 width: parent.width
-                height: parent.height - 48
+                height: parent.height - titleBar.height
 
                 Column {
                     anchors.fill: parent
-                    anchors.margins: Theme.spacingL
+                    anchors.margins: Theme.windowInset
+                    anchors.topMargin: 0
                     spacing: Theme.spacingM
 
-                    DankTextField {
+                    DankSearchField {
                         id: searchField
                         width: parent.width
-                        height: 48
-                        leftIconName: "search"
-                        leftIconSize: Theme.iconSize
-                        leftIconColor: Theme.surfaceVariantText
-                        leftIconFocusedColor: Theme.primary
-                        showClearButton: true
+                        height: Theme.fieldHeightLarge
                         textColor: Theme.surfaceText
                         font.pixelSize: Theme.fontSizeMedium
                         placeholderText: I18n.tr("Search applications...")
@@ -154,16 +106,16 @@ DankFloatingWindow {
 
                         delegate: Rectangle {
                             width: appList.width
-                            height: 60
+                            height: Theme.listItemHeight + Theme.spacingXS
                             radius: Theme.cornerRadius
                             required property int index
                             required property var modelData
 
                             readonly property bool isSelected: root.keyboardNavigationActive && index === root.selectedIndex
 
-                            color: isSelected ? Theme.withAlpha(Theme.primary, 0.16) : appArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.08) : Theme.withAlpha(Theme.surfaceVariant, 0.3)
+                            color: isSelected ? Theme.selectedContainer : appArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.08) : Theme.floatingWindowNestedSurface
                             border.color: isSelected ? Theme.primary : Theme.outlineMedium
-                            border.width: isSelected ? 2 : Theme.layerOutlineWidth
+                            border.width: isSelected ? Theme.outlineWidthFocused : Theme.layerOutlineWidth
 
                             Row {
                                 anchors.fill: parent
@@ -171,8 +123,8 @@ DankFloatingWindow {
                                 spacing: Theme.spacingM
 
                                 Image {
-                                    width: 28
-                                    height: 28
+                                    width: Theme.iconSizeMedium + Theme.spacingS
+                                    height: Theme.iconSizeMedium + Theme.spacingS
                                     source: Paths.resolveIconUrl(modelData.icon || "application-x-executable")
                                     sourceSize.width: 28
                                     sourceSize.height: 28
@@ -192,7 +144,7 @@ DankFloatingWindow {
                                     StyledText {
                                         text: modelData.name || modelData.id || ""
                                         font.pixelSize: Theme.fontSizeMedium
-                                        font.weight: Font.Medium
+                                        font.weight: Theme.fontWeightMedium
                                         color: Theme.surfaceText
                                         elide: Text.ElideRight
                                         width: parent.width
@@ -209,7 +161,7 @@ DankFloatingWindow {
 
                                 DankIcon {
                                     name: "add"
-                                    size: Theme.iconSize - 4
+                                    size: Theme.iconSizeMedium
                                     color: Theme.primary
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
@@ -229,8 +181,9 @@ DankFloatingWindow {
 
                             Behavior on color {
                                 ColorAnimation {
-                                    duration: Theme.shortDuration
-                                    easing.type: Theme.standardEasing
+                                    duration: Theme.expressiveDurations.expressiveFastEffects
+                                    easing.type: Easing.BezierSpline
+                                    easing.bezierCurve: Theme.expressiveCurves.expressiveEffects
                                 }
                             }
                         }

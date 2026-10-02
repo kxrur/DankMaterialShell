@@ -2,143 +2,38 @@ import QtQuick
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modules.Settings.Widgets
 
-Rectangle {
+SettingsNavRow {
     id: root
 
-    property var parentModal: null
+    signal navigationRequested(bool keyboard)
 
-    width: parent.width - Theme.spacingS * 2
-    height: 110
-    radius: Theme.cornerRadius
-    color: "transparent"
-    border.width: 0
+    onClicked: keyboard => navigationRequested(keyboard)
 
-    Row {
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: Theme.spacingM
-        anchors.rightMargin: Theme.spacingM
-        spacing: Theme.spacingM
+    title: UserInfoService.fullName || I18n.tr("User")
+    hint: DgopService.hostname || "DMS"
+    singleLineTitle: true
+    paddingH: Theme.spacingL
+    paddingV: Theme.spacingS
+    minHeight: Theme.listItemHeight
+    showChevron: false
 
-        Item {
-            id: profileImageContainer
+    leading: Item {
+        width: SettingsMetrics.navIconSize + Theme.spacingM - Theme.spacingL
+        height: Theme.minimumTouchTargetSize
 
-            width: 80
-            height: 80
+        DankCircularImage {
+            width: Theme.minimumTouchTargetSize
+            ringWidth: Theme.avatarRingWidth
+            ringColor: Theme.avatarRingColor
+            height: width
+            anchors.left: parent.left
+            anchors.leftMargin: (SettingsMetrics.navIconSize - width) / 2
             anchors.verticalCenter: parent.verticalCenter
-
-            DankCircularImage {
-                id: profileImage
-
-                anchors.fill: parent
-                imageSource: {
-                    if (PortalService.profileImage === "") {
-                        return "";
-                    }
-                    if (PortalService.profileImage.startsWith("/")) {
-                        return "file://" + PortalService.profileImage;
-                    }
-                    return PortalService.profileImage;
-                }
-                fallbackIcon: "person"
-            }
-
-            Rectangle {
-                anchors.fill: parent
-                radius: width / 2
-                color: Qt.rgba(0, 0, 0, 0.7)
-                visible: profileMouseArea.containsMouse
-
-                Row {
-                    anchors.centerIn: parent
-                    spacing: Theme.spacingXS
-
-                    Rectangle {
-                        width: 28
-                        height: 28
-                        radius: 14
-                        color: Qt.rgba(255, 255, 255, 0.9)
-
-                        DankIcon {
-                            anchors.centerIn: parent
-                            name: "edit"
-                            size: 16
-                            color: "black"
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: () => {
-                                if (root.parentModal) {
-                                    root.parentModal.allowFocusOverride = true;
-                                    root.parentModal.shouldHaveFocus = false;
-                                    root.parentModal.openProfileBrowser();
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: 28
-                        height: 28
-                        radius: 14
-                        color: Qt.rgba(255, 255, 255, 0.9)
-                        visible: profileImage.hasImage
-
-                        DankIcon {
-                            anchors.centerIn: parent
-                            name: "close"
-                            size: 16
-                            color: "black"
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: () => {
-                                return PortalService.setProfileImage("");
-                            }
-                        }
-                    }
-                }
-            }
-
-            MouseArea {
-                id: profileMouseArea
-
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                propagateComposedEvents: true
-                acceptedButtons: Qt.NoButton
-            }
-        }
-
-        Column {
-            width: 120
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Theme.spacingXS
-
-            StyledText {
-                text: UserInfoService.fullName || "User"
-                font.pixelSize: Theme.fontSizeLarge
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-                elide: Text.ElideRight
-                width: parent.width
-                horizontalAlignment: Text.AlignLeft
-            }
-
-            StyledText {
-                text: DgopService.hostname || "DMS"
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.surfaceVariantText
-                elide: Text.ElideRight
-                width: parent.width
-                horizontalAlignment: Text.AlignLeft
-            }
+            imageSource: PortalService.profileImage
+            fallbackIcon: imageSource ? "material:person" : ""
+            fallbackText: root.title.charAt(0).toLocaleUpperCase()
         }
     }
 }

@@ -9,12 +9,13 @@ import qs.Common
 import qs.Services
 import "settings/SessionSpec.js" as Spec
 import "settings/SessionStore.js" as Store
+import "../DankCommon/Common/settings/SpecUtil.js" as SpecUtil
 
 Singleton {
     id: root
     readonly property var log: Log.scoped("SessionData")
 
-    readonly property int sessionConfigVersion: 4
+readonly property int sessionConfigVersion: 7
 
     readonly property bool isGreeterMode: Quickshell.env("DMS_RUN_GREETER") === "1" || Quickshell.env("DMS_RUN_GREETER") === "true"
 
@@ -36,9 +37,15 @@ Singleton {
     property bool isLightMode: false
     property bool doNotDisturb: false
     property real doNotDisturbUntil: 0
+    property bool doNotDisturbHeldByScreenShare: false
+    property bool screenShareDndDismissed: false
+    property var screenShareDismissedIds: []
     property bool idleInhibited: false
     property real idleInhibitedUntil: 0
     property string terminalOverride: ""
+    property int updaterNotifiedUnix: 0
+    property int updaterNotifiedCount: 0
+    property string changelogSeenVersion: ""
     property bool isSwitchingMode: false
     property bool suppressOSD: true
 
@@ -72,7 +79,15 @@ Singleton {
         id: dndExpireTimer
         repeat: false
         running: false
-        onTriggered: root.setDoNotDisturb(false)
+        onTriggered: root.setDoNotDisturb(false, 0, "timer")
+    }
+
+    Timer {
+        id: screenShareReleaseTimer
+        interval: 4000
+        repeat: false
+        running: false
+        onTriggered: root._endScreenShareDnd()
     }
 
     function _armDndExpireTimer() {
@@ -81,7 +96,7 @@ Singleton {
             return;
         const remaining = doNotDisturbUntil - Date.now();
         if (remaining <= 0) {
-            setDoNotDisturb(false);
+            setDoNotDisturb(false, 0, "timer");
             return;
         }
         dndExpireTimer.interval = remaining;
@@ -109,6 +124,14 @@ Singleton {
             root.suppressOSD = true;
             osdSuppressTimer.restart();
             root._applyDndExpirySanity();
+            Qt.callLater(root.syncScreenShareDnd);
+        }
+    }
+
+    Connections {
+        target: typeof SettingsData !== "undefined" ? SettingsData : null
+        function onNotificationDndWhileScreenSharingChanged() {
+            root.syncScreenShareDnd();
         }
     }
 
@@ -174,7 +197,6 @@ Singleton {
     property real latitude: 0.0
     property real longitude: 0.0
     property bool nightModeUseIPLocation: false
-    property string nightModeLocationProvider: ""
     property string nightModeLocationName: ""
 
     property bool themeModeAutoEnabled: false
@@ -186,9 +208,8 @@ Singleton {
     property bool themeModeShareGammaSettings: true
     property string themeModeNextTransition: ""
 
-    property var pinnedApps: []
+    property var dockPins: ({})
     property var barPinnedApps: []
-    property int dockLauncherPosition: 0
     property var hiddenTrayIds: []
     property var trayItemOrder: []
     property var recentColors: []
@@ -196,19 +217,16 @@ Singleton {
     property bool pluginBrowserInstalledFirst: false
     property bool pluginBrowserHideInstalled: true
     property string pluginBrowserSortMode: "default"
-    property string launchPrefix: ""
     property string lastBrightnessDevice: ""
     property var brightnessExponentialDevices: ({})
     property var brightnessUserSetValues: ({})
     property var brightnessExponentValues: ({})
 
-    property int selectedGpuIndex: 0
     property bool nvidiaGpuTempEnabled: false
     property bool nonNvidiaGpuTempEnabled: false
     property var enabledGpuPciIds: []
 
     property string wifiDeviceOverride: ""
-    property bool weatherHourlyDetailed: true
 
     property string weatherLocation: "New York, NY"
     property string weatherCoordinates: "40.7128,-74.0060"
@@ -239,6 +257,7 @@ Singleton {
     property var activeDisplayProfileModes: ({})
     property var desktopWidgetGridSettings: ({})
     property var desktopWidgetInstancePositions: ({})
+    property var islandFreePositions: ({})
     property var builtInPluginState: ({})
     property bool greeterSyncPending: false
     property var greeterSyncBaseline: ({})
@@ -250,8 +269,6 @@ Singleton {
     property var launcherQueryHistory: []
     property string appDrawerLastMode: "apps"
     property string niriOverviewLastMode: "apps"
-    property string settingsSidebarExpandedIds: ","
-    property string settingsSidebarCollapsedIds: ","
     property bool showConfigReloadToast: true
 
     Component.onCompleted: {
@@ -311,6 +328,7 @@ Singleton {
                 Theme.generateSystemThemesFromCurrentTheme();
 
             loaded();
+            Qt.callLater(root.syncScreenShareDnd);
 
             _checkSessionWritable();
         } catch (e) {
@@ -393,6 +411,7 @@ Singleton {
                 Theme.generateSystemThemesFromCurrentTheme();
 
             loaded();
+            Qt.callLater(root.syncScreenShareDnd);
         } catch (e) {
             _parseError = true;
             const msg = e.message;
@@ -430,6 +449,17 @@ Singleton {
 
     function set(key, value) {
         Spec.set(root, key, value, saveSettings, _hooks);
+    }
+
+    function isDefault(keys) {
+        return keys.every(key => !(key in Spec.SPEC) || SpecUtil.isDefault(root[key], Spec.SPEC[key].def));
+    }
+
+    function resetToDefault(keys) {
+        for (const key of keys) {
+            if (key in Spec.SPEC)
+                set(key, SpecUtil.cloneDef(Spec.SPEC[key].def));
+        }
     }
 
     function importFromSettings(payload) {
@@ -545,6 +575,21 @@ Singleton {
         saveSettings();
     }
 
+    // Fractions of the screen so the anchor survives resolution and scale changes.
+    function setIslandFreePosition(key, x, y) {
+        const next = {
+            "x": Math.max(0, Math.min(1, x)),
+            "y": Math.max(0, Math.min(1, y))
+        };
+        const current = islandFreePositions[key];
+        if (current && current.x === next.x && current.y === next.y)
+            return;
+        const updated = Object.assign({}, islandFreePositions);
+        updated[key] = next;
+        islandFreePositions = updated;
+        saveSettings();
+    }
+
     function syncDesktopWidgetPositionToAllScreens(instanceId) {
         const positions = desktopWidgetInstancePositions[instanceId] || {};
         const screenKeys = Object.keys(positions).filter(k => k !== "_synced");
@@ -580,6 +625,18 @@ Singleton {
         saveSettings();
     }
 
+    function resetDesktopWidgetInstanceGeometry(instanceId, keys) {
+        if (!(instanceId in desktopWidgetInstancePositions))
+            return;
+        const updated = JSON.parse(JSON.stringify(desktopWidgetInstancePositions));
+        for (const screenKey in updated[instanceId]) {
+            for (const key of keys)
+                delete updated[instanceId][screenKey][key];
+        }
+        desktopWidgetInstancePositions = updated;
+        saveSettings();
+    }
+
     function setBuiltInPluginState(pluginId, state) {
         const updated = JSON.parse(JSON.stringify(builtInPluginState));
         updated[pluginId] = state;
@@ -598,9 +655,6 @@ Singleton {
             if (settings.acSuspendTimeout !== undefined) {
                 SettingsData.set("acSuspendTimeout", settings.acSuspendTimeout);
             }
-            if (settings.acHibernateTimeout !== undefined) {
-                SettingsData.set("acHibernateTimeout", settings.acHibernateTimeout);
-            }
             if (settings.batteryMonitorTimeout !== undefined) {
                 SettingsData.set("batteryMonitorTimeout", settings.batteryMonitorTimeout);
             }
@@ -609,9 +663,6 @@ Singleton {
             }
             if (settings.batterySuspendTimeout !== undefined) {
                 SettingsData.set("batterySuspendTimeout", settings.batterySuspendTimeout);
-            }
-            if (settings.batteryHibernateTimeout !== undefined) {
-                SettingsData.set("batteryHibernateTimeout", settings.batteryHibernateTimeout);
             }
             if (settings.lockBeforeSuspend !== undefined) {
                 SettingsData.set("lockBeforeSuspend", settings.lockBeforeSuspend);
@@ -624,12 +675,7 @@ Singleton {
             }
         }
         if (typeof CacheData !== "undefined") {
-            if (settings.wallpaperLastPath !== undefined) {
-                CacheData.wallpaperLastPath = settings.wallpaperLastPath;
-            }
-            if (settings.profileLastPath !== undefined) {
-                CacheData.profileLastPath = settings.profileLastPath;
-            }
+            CacheData.fileBrowserSettings = CacheData.withLegacyLastPaths(CacheData.fileBrowserSettings, settings);
             CacheData.saveCache();
         }
     }
@@ -645,11 +691,24 @@ Singleton {
         });
     }
 
-    function setDoNotDisturb(enabled, durationMinutes) {
+    function setDoNotDisturb(enabled, durationMinutes, origin) {
+        const src = origin || "user";
+        if (src === "user") {
+            if (!enabled && _screenShareShouldHold()) {
+                screenShareDndDismissed = true;
+                screenShareDismissedIds = _screencastIds();
+            }
+            if (doNotDisturbHeldByScreenShare)
+                doNotDisturbHeldByScreenShare = false;
+        }
+
         const minutes = Number(durationMinutes) || 0;
         doNotDisturb = enabled;
         doNotDisturbUntil = (enabled && minutes > 0) ? Date.now() + minutes * 60 * 1000 : 0;
         saveSettings();
+
+        if (src !== "screenshare")
+            Qt.callLater(syncScreenShareDnd);
     }
 
     function setIdleInhibited(enabled, durationMinutes) {
@@ -669,9 +728,90 @@ Singleton {
             setDoNotDisturb(false);
             return;
         }
+        if (doNotDisturbHeldByScreenShare)
+            doNotDisturbHeldByScreenShare = false;
         doNotDisturb = true;
         doNotDisturbUntil = target;
         saveSettings();
+    }
+
+    function _screenShareShouldHold() {
+        if (isGreeterMode)
+            return false;
+        if (typeof SettingsData === "undefined" || !SettingsData.notificationDndWhileScreenSharing)
+            return false;
+        if (typeof PrivacyService === "undefined" || !PrivacyService.screensharingActive)
+            return false;
+        return true;
+    }
+
+    function _screencastIds() {
+        return (typeof PrivacyService !== "undefined") ? PrivacyService.screencastSourceIds() : [];
+    }
+
+    function _dismissalApplies() {
+        if (!screenShareDndDismissed)
+            return false;
+        const dismissed = screenShareDismissedIds || [];
+        if (!dismissed.length)
+            return true;
+        const current = _screencastIds();
+        if (!current.length)
+            return true;
+        return current.some(id => dismissed.indexOf(id) !== -1);
+    }
+
+    function _releaseScreenShareDndHold() {
+        if (!doNotDisturbHeldByScreenShare)
+            return;
+        doNotDisturbHeldByScreenShare = false;
+        if (!doNotDisturb || doNotDisturbUntil > 0) {
+            saveSettings();
+            return;
+        }
+        setDoNotDisturb(false, 0, "screenshare");
+    }
+
+    function _endScreenShareDnd() {
+        _clearScreenShareDismissal();
+        _releaseScreenShareDndHold();
+    }
+
+    function _clearScreenShareDismissal() {
+        if (!screenShareDndDismissed)
+            return;
+        screenShareDndDismissed = false;
+        screenShareDismissedIds = [];
+        saveSettings();
+    }
+
+    function syncScreenShareDnd() {
+        if (isGreeterMode)
+            return;
+
+        if (!_screenShareShouldHold()) {
+            if (!doNotDisturbHeldByScreenShare && !screenShareDndDismissed)
+                return;
+            const settingOn = typeof SettingsData !== "undefined" && SettingsData.notificationDndWhileScreenSharing;
+            if (!settingOn) {
+                screenShareReleaseTimer.stop();
+                _endScreenShareDnd();
+                return;
+            }
+            screenShareReleaseTimer.restart();
+            return;
+        }
+
+        screenShareReleaseTimer.stop();
+
+        if (!_dismissalApplies())
+            _clearScreenShareDismissal();
+
+        if (screenShareDndDismissed || doNotDisturb)
+            return;
+
+        doNotDisturbHeldByScreenShare = true;
+        setDoNotDisturb(true, 0, "screenshare");
     }
 
     function setWallpaper(imagePath) {
@@ -706,17 +846,25 @@ Singleton {
         }
     }
 
+    function setWallpaperForMode(path, light) {
+        if (light) {
+            wallpaperPathLight = path;
+        } else {
+            wallpaperPathDark = path;
+        }
+        syncWallpaperForCurrentMode();
+        saveSettings();
+
+        if (light !== isLightMode)
+            return;
+        if (typeof Theme !== "undefined") {
+            Theme.generateSystemThemesFromCurrentTheme();
+        }
+    }
+
     function clearWallpaper() {
         wallpaperPath = "";
         saveSettings();
-
-        if (typeof Theme !== "undefined") {
-            if (typeof SettingsData !== "undefined" && SettingsData.theme) {
-                Theme.switchTheme(SettingsData.theme);
-            } else {
-                Theme.switchTheme("purple");
-            }
-        }
     }
 
     function setPerMonitorWallpaper(enabled) {
@@ -873,190 +1021,49 @@ Singleton {
         saveSettings();
     }
 
-    function setMonitorCyclingEnabled(screenName, enabled) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
-        }
-
+    function updateMonitorCyclingSetting(screenName, key, value) {
+        const screen = _screenByName(screenName);
         if (!screen) {
             log.warn("Screen not found");
             return;
         }
 
-        var identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
-
-        var newSettings = {};
-        for (var key in monitorCyclingSettings) {
-            var isThisScreen = key === screen.name || (screen.model && key === screen.model);
-            if (!isThisScreen) {
-                newSettings[key] = monitorCyclingSettings[key];
-            }
+        const identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
+        const newSettings = {};
+        for (const existing in monitorCyclingSettings) {
+            const isThisScreen = existing === screen.name || (screen.model && existing === screen.model);
+            if (!isThisScreen)
+                newSettings[existing] = monitorCyclingSettings[existing];
         }
 
         newSettings[identifier] = getMonitorCyclingSettings(screenName);
-        newSettings[identifier].enabled = enabled;
+        newSettings[identifier][key] = value;
         monitorCyclingSettings = newSettings;
         saveSettings();
+    }
+
+    function setMonitorCyclingEnabled(screenName, enabled) {
+        updateMonitorCyclingSetting(screenName, "enabled", enabled);
     }
 
     function setMonitorCyclingRandom(screenName, random) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
-        }
-
-        if (!screen) {
-            log.warn("Screen not found");
-            return;
-        }
-
-        var identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
-
-        var newSettings = {};
-        for (var key in monitorCyclingSettings) {
-            var isThisScreen = key === screen.name || (screen.model && key === screen.model);
-            if (!isThisScreen) {
-                newSettings[key] = monitorCyclingSettings[key];
-            }
-        }
-
-        newSettings[identifier] = getMonitorCyclingSettings(screenName);
-        newSettings[identifier].random = random;
-        monitorCyclingSettings = newSettings;
-        saveSettings();
+        updateMonitorCyclingSetting(screenName, "random", random);
     }
 
     function setMonitorCyclingMode(screenName, mode) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
-        }
-
-        if (!screen) {
-            log.warn("Screen not found");
-            return;
-        }
-
-        var identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
-
-        var newSettings = {};
-        for (var key in monitorCyclingSettings) {
-            var isThisScreen = key === screen.name || (screen.model && key === screen.model);
-            if (!isThisScreen) {
-                newSettings[key] = monitorCyclingSettings[key];
-            }
-        }
-
-        newSettings[identifier] = getMonitorCyclingSettings(screenName);
-        newSettings[identifier].mode = mode;
-        monitorCyclingSettings = newSettings;
-        saveSettings();
+        updateMonitorCyclingSetting(screenName, "mode", mode);
     }
 
     function setMonitorCyclingInterval(screenName, interval) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
-        }
-
-        if (!screen) {
-            log.warn("Screen not found");
-            return;
-        }
-
-        var identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
-
-        var newSettings = {};
-        for (var key in monitorCyclingSettings) {
-            var isThisScreen = key === screen.name || (screen.model && key === screen.model);
-            if (!isThisScreen) {
-                newSettings[key] = monitorCyclingSettings[key];
-            }
-        }
-
-        newSettings[identifier] = getMonitorCyclingSettings(screenName);
-        newSettings[identifier].interval = interval;
-        monitorCyclingSettings = newSettings;
-        saveSettings();
+        updateMonitorCyclingSetting(screenName, "interval", interval);
     }
 
     function setMonitorCyclingTime(screenName, time) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
-        }
-
-        if (!screen) {
-            log.warn("Screen not found");
-            return;
-        }
-
-        var identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
-
-        var newSettings = {};
-        for (var key in monitorCyclingSettings) {
-            var isThisScreen = key === screen.name || (screen.model && key === screen.model);
-            if (!isThisScreen) {
-                newSettings[key] = monitorCyclingSettings[key];
-            }
-        }
-
-        newSettings[identifier] = getMonitorCyclingSettings(screenName);
-        newSettings[identifier].time = time;
-        monitorCyclingSettings = newSettings;
-        saveSettings();
+        updateMonitorCyclingSetting(screenName, "time", time);
     }
 
     function setMonitorCyclingFolderPath(screenName, folderPath) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
-        }
-
-        if (!screen) {
-            log.warn("Screen not found");
-            return;
-        }
-
-        var identifier = typeof SettingsData !== "undefined" ? SettingsData.getScreenDisplayName(screen) : screen.name;
-
-        var newSettings = {};
-        for (var key in monitorCyclingSettings) {
-            var isThisScreen = key === screen.name || (screen.model && key === screen.model);
-            if (!isThisScreen) {
-                newSettings[key] = monitorCyclingSettings[key];
-            }
-        }
-
-        newSettings[identifier] = getMonitorCyclingSettings(screenName);
-        newSettings[identifier].folderPath = folderPath;
-        monitorCyclingSettings = newSettings;
-        saveSettings();
+        updateMonitorCyclingSetting(screenName, "folderPath", folderPath);
     }
 
     function setNightModeEnabled(enabled) {
@@ -1174,37 +1181,30 @@ Singleton {
         saveSettings();
     }
 
-    function setPinnedApps(apps) {
-        pinnedApps = apps;
+    function getDockPins(id) {
+        return dockPins[id] ?? [];
+    }
+    function setDockPins(id, apps) {
+        dockPins = Object.assign({}, dockPins, {
+            [id]: [...new Set(apps)]
+        });
         saveSettings();
     }
-
-    function setDockLauncherPosition(position) {
-        dockLauncherPosition = position;
+    function removeDockPins(id) {
+        const next = Object.assign({}, dockPins);
+        delete next[id];
+        dockPins = next;
         saveSettings();
     }
-
-    function addPinnedApp(appId) {
-        if (!appId)
-            return;
-        var currentPinned = [...pinnedApps];
-        if (currentPinned.indexOf(appId) === -1) {
-            currentPinned.push(appId);
-            setPinnedApps(currentPinned);
-        }
-    }
-
     function removePinnedApp(appId) {
         if (!appId)
             return;
-        var currentPinned = pinnedApps.filter(id => id !== appId);
-        setPinnedApps(currentPinned);
+        const next = {};
+        for (const id in dockPins)
+            next[id] = dockPins[id].filter(pin => pin !== appId);
+        dockPins = next;
+        saveSettings();
     }
-
-    function isPinnedApp(appId) {
-        return appId && pinnedApps.indexOf(appId) !== -1;
-    }
-
     function setBarPinnedApps(apps) {
         barPinnedApps = apps;
         saveSettings();
@@ -1347,11 +1347,6 @@ Singleton {
 
     function setWifiDeviceOverride(device) {
         wifiDeviceOverride = device || "";
-        saveSettings();
-    }
-
-    function setWeatherHourlyDetailed(detailed) {
-        weatherHourlyDetailed = detailed;
         saveSettings();
     }
 
@@ -1528,12 +1523,6 @@ Singleton {
         saveSettings();
     }
 
-    function setSettingsSidebarState(expandedIds, collapsedIds) {
-        settingsSidebarExpandedIds = expandedIds;
-        settingsSidebarCollapsedIds = collapsedIds;
-        saveSettings();
-    }
-
     function syncWallpaperForCurrentMode(mode) {
         if (!perModeWallpaper)
             return;
@@ -1546,16 +1535,17 @@ Singleton {
         wallpaperPath = light ? wallpaperPathLight : wallpaperPathDark;
     }
 
-    function _findMonitorValue(map, screenName) {
-        var screen = null;
-        var screens = Quickshell.screens;
-        for (var i = 0; i < screens.length; i++) {
-            if (screens[i].name === screenName) {
-                screen = screens[i];
-                break;
-            }
+    function _screenByName(screenName) {
+        const screens = Quickshell.screens;
+        for (let i = 0; i < screens.length; i++) {
+            if (screens[i].name === screenName)
+                return screens[i];
         }
+        return null;
+    }
 
+    function _findMonitorValue(map, screenName) {
+        const screen = _screenByName(screenName);
         if (!screen)
             return map[screenName];
 

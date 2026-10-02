@@ -60,6 +60,7 @@ Column {
     signal popoutRequested
     signal dockRequested
     signal conflictDetected(string diskContent)
+    signal largeFileConfirmRequested(var tab, real size)
     signal autoSaveRequested
 
     function hasUnsavedChanges() {
@@ -110,6 +111,14 @@ Column {
             loadedTabId = requestedTabId;
             contentLoaded = true;
             syncContentToPlugin();
+        }, size => {
+            if (requestId !== loadRequestId || !currentTab || currentTab.id !== requestedTabId)
+                return;
+            applyingShared = true;
+            lastSavedContent = "";
+            textArea.text = "";
+            applyingShared = false;
+            root.largeFileConfirmRequested(currentTab, size);
         });
     }
 
@@ -365,8 +374,8 @@ Column {
         visible: searchVisible
         opacity: searchVisible ? 1 : 0
         color: Theme.floatingWindowNestedSurface
-        border.color: searchField.getActiveFocus() ? Theme.primary : Theme.outlineMedium
-        border.width: searchField.getActiveFocus() ? 2 : 1
+        border.width: Theme.layerOutlineWidth
+        border.color: Theme.outlineMedium
         radius: Theme.cornerRadius
 
         Behavior on opacity {
@@ -381,19 +390,14 @@ Column {
             anchors.rightMargin: Theme.spacingM
             spacing: Theme.spacingS
 
-            DankTextField {
+            DankSearchField {
                 id: searchField
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
-                Layout.preferredHeight: 32
-                leftIconName: "search"
-                leftIconSize: Theme.iconSize - 2
+                Layout.preferredHeight: Theme.buttonHeightXS
+                leftIconSize: Theme.iconSizeSmall
                 font.pixelSize: Theme.fontSizeMedium
                 placeholderText: I18n.tr("Find in note...")
-                placeholderColor: Theme.surfaceTextSecondary
-                backgroundColor: "transparent"
-                borderWidth: 0
-                focusedBorderWidth: 0
                 topPadding: 0
                 bottomPadding: 0
                 keyForwardTargets: [searchKeyHandler]
@@ -409,12 +413,11 @@ Column {
                     }
                 }
 
-                Connections {
-                    target: root
-                    function onSearchQueryChanged() {
-                        if (searchField.text !== root.searchQuery) {
-                            searchField.text = root.searchQuery;
-                        }
+                readonly property string rootSearchQuery: root.searchQuery
+
+                onRootSearchQueryChanged: {
+                    if (text !== rootSearchQuery) {
+                        text = rootSearchQuery;
                     }
                 }
 
@@ -459,6 +462,7 @@ Column {
                 id: prevButton
                 Layout.alignment: Qt.AlignVCenter
                 iconName: "keyboard_arrow_up"
+                Accessible.name: I18n.tr("Previous")
                 iconSize: Theme.iconSize
                 iconColor: matchCount > 0 ? Theme.surfaceText : Theme.surfaceTextAlpha
                 enabled: matchCount > 0
@@ -469,6 +473,7 @@ Column {
                 id: nextButton
                 Layout.alignment: Qt.AlignVCenter
                 iconName: "keyboard_arrow_down"
+                Accessible.name: I18n.tr("Next")
                 iconSize: Theme.iconSize
                 iconColor: matchCount > 0 ? Theme.surfaceText : Theme.surfaceTextAlpha
                 enabled: matchCount > 0
@@ -479,6 +484,7 @@ Column {
                 id: closeSearchButton
                 Layout.alignment: Qt.AlignVCenter
                 iconName: "close"
+                Accessible.name: I18n.tr("Close")
                 iconSize: Theme.iconSize - 2
                 iconColor: Theme.surfaceText
                 onClicked: root.hideSearch()
@@ -489,9 +495,9 @@ Column {
     StyledRect {
         width: parent.width
         height: parent.height - bottomControls.height - Theme.spacingM - (searchVisible ? searchBar.height + Theme.spacingM : 0)
-        color: Theme.withAlpha(Theme.surface, Theme.notepadTransparency)
+        color: Theme.withAlpha(Theme.cardSurface, Theme.notepadTransparency)
         border.color: Theme.outlineMedium
-        border.width: 1
+        border.width: Theme.layerOutlineWidth
         radius: Theme.cornerRadius
 
         RowLayout {
@@ -597,13 +603,9 @@ Column {
                             height: textArea.cursorRectangle.height
                             shown: textArea.cursorVisible
 
-                            Connections {
-                                target: textArea
+                            readonly property int areaCursorPosition: textArea.cursorPosition
 
-                                function onCursorPositionChanged() {
-                                    notepadCursor.resetBlink();
-                                }
-                            }
+                            onAreaCursorPositionChanged: resetBlink()
                         }
 
                         Component.onCompleted: {
@@ -631,12 +633,9 @@ Column {
                             }
                         }
 
-                        Connections {
-                            target: SettingsData
-                            function onNotepadShowLineNumbersChanged() {
-                                root.updateLineModel();
-                            }
-                        }
+                        readonly property bool settingsShowLineNumbers: SettingsData.notepadShowLineNumbers
+
+                        onSettingsShowLineNumbersChanged: root.updateLineModel()
 
                         onTextChanged: {
                             // Debounced flush to the shared buffer (+ optional disk
@@ -731,7 +730,9 @@ Column {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     height: 36
-                    color: Theme.withAlpha(Theme.surface, Theme.notepadTransparency)
+                    color: Theme.withAlpha(Theme.cardSurface, Theme.notepadTransparency)
+                    border.width: Theme.layerOutlineWidth
+                    border.color: Theme.outlineMedium
                     z: 2
 
                     Row {
@@ -743,6 +744,7 @@ Column {
                         // Copy plain text button
                         DankActionButton {
                             iconName: "content_copy"
+                            Accessible.name: I18n.tr("Copy Text")
                             iconSize: Theme.iconSize - 4
                             iconColor: Theme.surfaceTextMedium
                             onClicked: copyPlainTextToClipboard()
@@ -765,6 +767,7 @@ Column {
                         // Copy HTML button
                         DankActionButton {
                             iconName: "code"
+                            Accessible.name: I18n.tr("Copy HTML")
                             iconSize: Theme.iconSize - 4
                             iconColor: Theme.surfaceTextMedium
                             onClicked: copyHtmlToClipboard()
@@ -828,6 +831,7 @@ Column {
                     spacing: Theme.spacingS
                     DankActionButton {
                         iconName: "save"
+                        Accessible.name: I18n.tr("Save")
                         iconSize: Theme.iconSize - 2
                         iconColor: Theme.primary
                         enabled: currentTab && (hasUnsavedChanges() || textArea.text.length > 0)
@@ -845,6 +849,7 @@ Column {
                     spacing: Theme.spacingS
                     DankActionButton {
                         iconName: "folder_open"
+                        Accessible.name: I18n.tr("Open")
                         iconSize: Theme.iconSize - 2
                         iconColor: Theme.secondary
                         onClicked: root.openRequested()
@@ -861,6 +866,7 @@ Column {
                     spacing: Theme.spacingS
                     DankActionButton {
                         iconName: "note_add"
+                        Accessible.name: I18n.tr("New")
                         iconSize: Theme.iconSize - 2
                         iconColor: Theme.surfaceText
                         onClicked: root.newRequested()
@@ -878,6 +884,7 @@ Column {
                     visible: PluginService.isPluginLoaded("dankNotepadModule")
                     DankActionButton {
                         iconName: inlinePreviewVisible ? "visibility" : "visibility_off"
+                        Accessible.name: I18n.tr("Preview")
                         iconSize: Theme.iconSize - 2
                         iconColor: Theme.surfaceText
                         enabled: textArea.text.length > 0
@@ -901,6 +908,7 @@ Column {
                 DankActionButton {
                     visible: !root.inPopout
                     iconName: "open_in_new"
+                    tooltipText: I18n.tr("Open as window")
                     iconSize: Theme.iconSize - 2
                     iconColor: Theme.surfaceText
                     onClicked: root.popoutRequested()
@@ -909,6 +917,7 @@ Column {
                 DankActionButton {
                     visible: root.inPopout
                     iconName: "dock_to_right"
+                    tooltipText: I18n.tr("Dock")
                     iconSize: Theme.iconSize - 2
                     iconColor: Theme.surfaceText
                     onClicked: root.dockRequested()
@@ -916,6 +925,7 @@ Column {
 
                 DankActionButton {
                     iconName: "more_horiz"
+                    tooltipText: I18n.tr("Settings")
                     iconSize: Theme.iconSize - 2
                     iconColor: Theme.surfaceText
                     onClicked: root.settingsRequested()
@@ -933,7 +943,7 @@ Column {
                 radius: Theme.cornerRadius
                 color: Theme.floatingWindowNestedSurface
                 border.color: Theme.outlineMedium
-                border.width: 1
+                border.width: Theme.layerOutlineWidth
                 z: 10
 
                 Row {
@@ -964,6 +974,7 @@ Column {
                     DankActionButton {
                         id: copyPathButton
                         iconName: "content_copy"
+                        Accessible.name: I18n.tr("Copy path")
                         iconSize: Theme.iconSize - 6
                         iconColor: Theme.surfaceTextMedium
                         anchors.verticalCenter: parent.verticalCenter
@@ -992,14 +1003,14 @@ Column {
                     const len = textArea.text.length;
                     if (len === 0)
                         return I18n.tr("Empty");
-                    return len === 1 ? I18n.tr("%1 character").arg(len) : I18n.tr("%1 characters").arg(len);
+                    return len === 1 ? I18n.tr("%1 character", "singular, notepad status bar character count, %1 is 1").arg(len) : I18n.tr("%1 characters", "plural, notepad status bar character count, %1 is a count").arg(len);
                 }
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceTextMedium
             }
 
             StyledText {
-                text: textArea.lineCount === 1 ? I18n.tr("Line: %1").arg(textArea.lineCount) : I18n.tr("Lines: %1").arg(textArea.lineCount)
+                text: textArea.lineCount === 1 ? I18n.tr("Line: %1", "singular, notepad status bar line count, %1 is 1").arg(textArea.lineCount) : I18n.tr("Lines: %1", "plural, notepad status bar line count, %1 is a count").arg(textArea.lineCount)
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceTextMedium
                 visible: textArea.text.length > 0
@@ -1022,7 +1033,7 @@ Column {
                             return I18n.tr("Auto saved");
                         }
 
-                        return hasUnsavedChanges() ? I18n.tr("Unsaved changes") : I18n.tr("Saved");
+                        return hasUnsavedChanges() ? I18n.tr("Unsaved changes") : I18n.tr("Saved", "notepad status, file has no unsaved changes", true);
                     }
                     font.pixelSize: Theme.fontSizeSmall
                     color: {
@@ -1041,6 +1052,7 @@ Column {
                 DankActionButton {
                     anchors.verticalCenter: parent.verticalCenter
                     iconName: "info"
+                    tooltipText: I18n.tr("File info")
                     iconSize: Theme.iconSizeSmall
                     iconColor: root.showPathInfo ? Theme.primary : Theme.surfaceTextMedium
                     buttonSize: 20
@@ -1068,7 +1080,7 @@ Column {
 
     FileView {
         id: externalWatch
-        path: (!root.externalWatchPaused && currentTab && !currentTab.isTemporary && currentTab.filePath) ? currentTab.filePath : ""
+        path: (!root.externalWatchPaused && currentTab && !currentTab.isTemporary && currentTab.filePath && root.loadedTabId === currentTab.id) ? currentTab.filePath : ""
         blockLoading: true
         preload: true
         watchChanges: true
@@ -1098,32 +1110,29 @@ Column {
         onLoadFailed: error => {}
     }
 
-    Connections {
-        target: SettingsData
-        function onBuiltInPluginSettingsChanged() {
-            if (PluginService.isPluginLoaded("dankNotepadModule")) {
-                pluginHighlightedHtml = SettingsData.getBuiltInPluginSetting("dankNotepadModule", "highlightedHtml", "");
-            }
+    readonly property var settingsBuiltInPluginSettings: SettingsData.builtInPluginSettings
+    readonly property int storageSessionBufferRevision: NotepadStorageService.sessionBufferRevision
+
+    onSettingsBuiltInPluginSettingsChanged: {
+        if (PluginService.isPluginLoaded("dankNotepadModule")) {
+            pluginHighlightedHtml = SettingsData.getBuiltInPluginSetting("dankNotepadModule", "highlightedHtml", "");
         }
     }
 
-    Connections {
-        target: NotepadStorageService
-        function onSessionBufferRevisionChanged() {
-            if (applyingShared || !contentLoaded || loadedTabId < 0)
-                return;
-            if (textArea.activeFocus)
-                return;
-            var buffer = NotepadStorageService.getSessionBuffer(loadedTabId);
-            if (buffer === undefined || buffer.content === textArea.text)
-                return;
-            if (textArea.text === lastSavedContent) {
-                applyingShared = true;
-                lastSavedContent = buffer.baseline;
-                textArea.text = buffer.content;
-                applyingShared = false;
-                syncContentToPlugin();
-            }
+    onStorageSessionBufferRevisionChanged: {
+        if (applyingShared || !contentLoaded || loadedTabId < 0)
+            return;
+        if (textArea.activeFocus)
+            return;
+        var buffer = NotepadStorageService.getSessionBuffer(loadedTabId);
+        if (buffer === undefined || buffer.content === textArea.text)
+            return;
+        if (textArea.text === lastSavedContent) {
+            applyingShared = true;
+            lastSavedContent = buffer.baseline;
+            textArea.text = buffer.content;
+            applyingShared = false;
+            syncContentToPlugin();
         }
     }
 }

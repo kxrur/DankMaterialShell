@@ -17,38 +17,44 @@ StyledRect {
     property string reason: ""
     property var parentModal: null
 
-    readonly property string resolvedTarget: target || (SettingsData.frameEnabled ? "frame" : "island")
+    readonly property string resolvedTarget: target || "frame"
     readonly property string iconName: {
         switch (resolvedTarget) {
-        case "island":
-            return "view_in_ar";
+        case "surfaces":
+            return "layers";
+        case "shadows":
+            return "tonality";
         default:
             return "frame_source";
         }
     }
     readonly property string buttonText: {
         switch (resolvedTarget) {
-        case "island":
-            return I18n.tr("Open Island", "settings: button that opens the Dank Island tab");
+        case "surfaces":
+            return I18n.tr("Interface style");
+        case "shadows":
+            return I18n.tr("Shadows");
         default:
             return I18n.tr("Open Frame", "settings: button that opens the Frame tab");
         }
     }
     readonly property string tabName: {
         switch (resolvedTarget) {
-        case "island":
-            return "dank_island";
+        case "surfaces":
+            return "theme_surfaces";
+        case "shadows":
+            return "surface_shadows";
         default:
-            return "frame";
+            return section === "frameConnectedOptions" ? "dankbar_settings" : "dankbar_appearance";
         }
     }
 
     width: parent?.width ?? 0
     height: contentRow.implicitHeight + Theme.spacingM * 2
     radius: Theme.cornerRadius
-    color: Theme.withAlpha(Theme.primary, 0.08)
-    border.color: Theme.withAlpha(Theme.primary, 0.18)
-    border.width: 1
+    color: Theme.withAlpha(Theme.primary, Theme.stateLayerHover)
+    border.color: Theme.withAlpha(Theme.primary, Theme.stateLayerDrag)
+    border.width: Theme.outlineWidth
 
     Row {
         id: contentRow
@@ -74,7 +80,7 @@ StyledRect {
             StyledText {
                 text: root.settingLabel
                 font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
                 width: parent.width
                 wrapMode: Text.WordWrap
@@ -96,14 +102,14 @@ StyledRect {
             text: root.buttonText
             backgroundColor: Theme.primary
             textColor: Theme.primaryText
-            buttonHeight: 32
+            buttonHeight: Theme.buttonHeightXS
             horizontalPadding: Theme.spacingM
             onClicked: {
                 if (!root.parentModal)
                     return;
                 if (root.section)
                     SettingsSearchService.navigateToSection(root.section);
-                root.parentModal.showWithTabName(root.tabName);
+                root.parentModal.navigateTo(root.tabName);
             }
         }
     }

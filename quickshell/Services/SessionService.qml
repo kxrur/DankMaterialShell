@@ -7,6 +7,7 @@ import Quickshell.Io
 import Quickshell.I3
 import qs.Common
 import qs.Services
+import "../Common/SleepLock.js" as SleepLock
 
 Singleton {
     id: root
@@ -42,12 +43,16 @@ Singleton {
     signal sessionLocked
     signal sessionUnlocked
     signal sessionResumed
+    signal lidOpened
     signal loginctlStateChanged
 
     property bool stateInitialized: false
     property string prepareForSleepSubscriptionId: ""
     property bool prepareForSleepSubscriptionPending: false
+    property string lidSubscriptionId: ""
+    property bool lidSubscriptionPending: false
     property double lastResumeSignalTimestamp: 0
+    property var pendingSleepFn: null
 
     readonly property string socketPath: Quickshell.env("DMS_SOCKET")
 
@@ -73,6 +78,14 @@ Singleton {
                 log.debug("DMS_SOCKET not set");
             }
         }
+    }
+
+    Timer {
+        id: lockBeforeSleepFallback
+        // Custom lockers never set WlSessionLock.secure.
+        interval: 2000
+        repeat: false
+        onTriggered: root.flushPendingSleep()
     }
 
     Process {
@@ -293,11 +306,41 @@ Singleton {
         return env;
     }
 
-    function launchDesktopEntry(desktopEntry, useNvidia) {
+    function resolveDesktopId(desktopId) {
+        if (!desktopId)
+            return null;
+        const entry = DesktopEntries.heuristicLookup(desktopId);
+        if (entry || !desktopId.endsWith(".desktop"))
+            return entry;
+        return DesktopEntries.heuristicLookup(desktopId.slice(0, -8));
+    }
+
+    // xdg-open's generic opener ignores Terminal=true, so resolve the handler here and launch it ourselves
+    function openPath(path) {
+        if (!path)
+            return;
+        const fallback = () => Qt.openUrlExternally("file://" + path);
+        if (!DMSService.isConnected) {
+            fallback();
+            return;
+        }
+        DMSService.sendRequest("mime.getDefault", {
+            "path": path
+        }, response => {
+            const entry = resolveDesktopId(response?.result?.desktopId);
+            if (!entry) {
+                fallback();
+                return;
+            }
+            launchDesktopEntry(entry, false, [path]);
+        });
+    }
+
+    function launchDesktopEntry(desktopEntry, useNvidia, args) {
         if (!desktopEntry || !desktopEntry.command)
             return;
         CompositorService.closeNiriOverviewOnWindowFocus();
-        let cmd = desktopEntry.command;
+        let cmd = args?.length ? [...desktopEntry.command, ...args] : desktopEntry.command;
 
         const appId = desktopEntry.id || desktopEntry.execString || desktopEntry.exec || "";
         const override = SessionData.getAppOverride(appId);
@@ -423,6 +466,11 @@ Singleton {
                 return;
             }
 
+            if (CompositorService.isUmbriel) {
+                UmbrielService.action("session-quit:skip-confirmation");
+                return;
+            }
+
             if (CompositorService.isSway || CompositorService.isScroll || CompositorService.isMiracle) {
                 try {
                     I3.dispatch("exit");
@@ -464,26 +512,64 @@ Singleton {
         }
     }
 
-    function suspend() {
-        if (SettingsData.customPowerActionSuspend.length === 0) {
-            Quickshell.execDetached(powerManagerCommand("suspend"));
-        } else {
-            Quickshell.execDetached(["sh", "-c", SettingsData.customPowerActionSuspend]);
+    function cancelPendingSleep() {
+        lockBeforeSleepFallback.stop();
+        pendingSleepFn = null;
+    }
+
+    function flushPendingSleep() {
+        lockBeforeSleepFallback.stop();
+        const run = pendingSleepFn;
+        pendingSleepFn = null;
+        if (run)
+            run();
+    }
+
+    function onSessionLockSecured() {
+        if (pendingSleepFn)
+            flushPendingSleep();
+    }
+
+    function runSleepAction(run) {
+        cancelPendingSleep();
+        if (!SleepLock.shouldWaitForLock(SettingsData.lockBeforeSuspend, IdleService.isSessionLockSecure)) {
+            run();
+            return;
         }
+        // Custom hibernate skips logind PrepareForSleep; dump RAM only after the lock is up.
+        // Assign before lockRequested: a synchronous secure must see this closure.
+        // A second call before the first runs drops the first (last wins).
+        pendingSleepFn = run;
+        IdleService.lockRequested();
+        lockBeforeSleepFallback.restart();
+    }
+
+    function suspend() {
+        runSleepAction(() => {
+            if (SettingsData.customPowerActionSuspend.length === 0) {
+                Quickshell.execDetached(powerManagerCommand("suspend"));
+            } else {
+                Quickshell.execDetached(["sh", "-c", SettingsData.customPowerActionSuspend]);
+            }
+        });
     }
 
     function hibernate() {
-        hibernateProcess.errorOutput = "";
-        if (SettingsData.customPowerActionHibernate.length > 0) {
-            hibernateProcess.command = ["sh", "-c", SettingsData.customPowerActionHibernate];
-        } else {
-            hibernateProcess.command = powerManagerCommand("hibernate");
-        }
-        hibernateProcess.running = true;
+        runSleepAction(() => {
+            hibernateProcess.errorOutput = "";
+            if (SettingsData.customPowerActionHibernate.length > 0) {
+                hibernateProcess.command = ["sh", "-c", SettingsData.customPowerActionHibernate];
+            } else {
+                hibernateProcess.command = powerManagerCommand("hibernate");
+            }
+            hibernateProcess.running = true;
+        });
     }
 
     function suspendThenHibernate() {
-        Quickshell.execDetached(powerManagerCommand("suspend-then-hibernate"));
+        runSleepAction(() => {
+            Quickshell.execDetached(powerManagerCommand("suspend-then-hibernate"));
+        });
     }
 
     function suspendWithBehavior(behavior) {
@@ -516,6 +602,12 @@ Singleton {
         }
     }
 
+    // Actions added in settings, listed after the built-in ones: boot entries, then custom buttons.
+    // Each list lines up index for index with its setting.
+    readonly property var bootEntryActions: (SettingsData.powerMenuBootEntries || []).map(entry => "bootnext:" + entry.id)
+    readonly property var customPowerActions: (SettingsData.customPowerButtons || []).map((button, i) => "custom:" + i)
+    readonly property var extraPowerActions: bootEntryActions.concat(customPowerActions)
+
     function isPowerActionSupported(action) {
         switch (action) {
         case "hibernate":
@@ -528,11 +620,17 @@ Singleton {
     }
 
     function executePowerAction(action) {
-        if (action.startsWith("custom:")) {
-            const button = (SettingsData.customPowerButtons || [])[parseInt(action.slice(7), 10)];
+        const customIndex = customPowerActions.indexOf(action);
+        if (customIndex >= 0) {
+            const button = SettingsData.customPowerButtons[customIndex];
             if (!button?.command)
                 return false;
             Quickshell.execDetached(customActionCommand(button.command));
+            return true;
+        }
+        const bootIndex = bootEntryActions.indexOf(action);
+        if (bootIndex >= 0) {
+            BootEntryService.rebootTo(SettingsData.powerMenuBootEntries[bootIndex]);
             return true;
         }
         switch (action) {
@@ -563,55 +661,65 @@ Singleton {
     }
 
     function getPowerActionData(action) {
-        if (action.startsWith("custom:")) {
-            const button = (SettingsData.customPowerButtons || [])[parseInt(action.slice(7), 10)];
+        const customIndex = customPowerActions.indexOf(action);
+        if (customIndex >= 0) {
+            const button = SettingsData.customPowerButtons[customIndex];
             return {
                 "icon": button?.icon || "terminal",
                 "label": button?.label || button?.command || "",
                 "key": ""
             };
         }
+        const bootIndex = bootEntryActions.indexOf(action);
+        if (bootIndex >= 0) {
+            // Boot entries take the digit keys in the order they were added
+            return {
+                "icon": "restart_alt",
+                "label": I18n.tr("Reboot to %1", "power menu action, %1 is a boot entry such as Windows Boot Manager").arg(SettingsData.powerMenuBootEntries[bootIndex].label),
+                "key": bootIndex < 9 ? String(bootIndex + 1) : ""
+            };
+        }
         switch (action) {
         case "reboot":
             return {
                 "icon": "restart_alt",
-                "label": I18n.tr("Reboot"),
+                "label": I18n.tr("Reboot", "verb, power menu action"),
                 "key": "R"
             };
         case "softreboot":
             return {
                 "icon": "autorenew",
-                "label": I18n.tr("Soft Reboot"),
+                "label": I18n.tr("Soft reboot"),
                 "key": "B"
             };
         case "logout":
             return {
                 "icon": "logout",
-                "label": I18n.tr("Log Out"),
+                "label": I18n.tr("Log out"),
                 "key": "X"
             };
         case "poweroff":
             return {
                 "icon": "power_settings_new",
-                "label": I18n.tr("Power Off"),
+                "label": I18n.tr("Power off"),
                 "key": "P"
             };
         case "lock":
             return {
                 "icon": "lock",
-                "label": I18n.tr("Lock"),
+                "label": I18n.tr("Lock", "verb, power menu action that locks the screen"),
                 "key": "L"
             };
         case "suspend":
             return {
                 "icon": "bedtime",
-                "label": I18n.tr("Suspend"),
+                "label": I18n.tr("Suspend", "verb, power menu action"),
                 "key": "S"
             };
         case "hibernate":
             return {
                 "icon": "ac_unit",
-                "label": I18n.tr("Hibernate"),
+                "label": I18n.tr("Hibernate", "verb, power menu action"),
                 "key": "H"
             };
         case "restart":
@@ -702,11 +810,11 @@ Singleton {
         _armExpireTimer();
     }
 
-    function toggleIdleInhibit() {
+    function toggleIdleInhibit(durationMinutes) {
         if (idleInhibited) {
             disableIdleInhibit();
         } else {
-            enableIdleInhibit();
+            enableIdleInhibit(durationMinutes);
         }
     }
 
@@ -721,7 +829,7 @@ Singleton {
             if (DMSService.isConnected) {
                 checkDMSCapabilities();
             } else {
-                clearPrepareForSleepSubscriptionState();
+                clearPowerSubscriptionState();
             }
         }
 
@@ -739,10 +847,11 @@ Singleton {
         }
 
         function onDbusSignalReceived(subscriptionId, data) {
-            if (subscriptionId !== prepareForSleepSubscriptionId) {
-                return;
+            if (subscriptionId === prepareForSleepSubscriptionId) {
+                handlePrepareForSleepSignal(data);
+            } else if (subscriptionId === lidSubscriptionId) {
+                handleLidPropertiesChanged(data);
             }
-            handlePrepareForSleepSignal(data);
         }
     }
 
@@ -804,14 +913,41 @@ Singleton {
 
         if (DMSService.capabilities.includes("dbus")) {
             ensurePrepareForSleepSubscription();
+            ensureLidSubscription();
         } else {
-            clearPrepareForSleepSubscriptionState();
+            clearPowerSubscriptionState();
         }
     }
 
-    function clearPrepareForSleepSubscriptionState() {
+    function clearPowerSubscriptionState() {
         prepareForSleepSubscriptionId = "";
         prepareForSleepSubscriptionPending = false;
+        lidSubscriptionId = "";
+        lidSubscriptionPending = false;
+    }
+
+    function ensureLidSubscription() {
+        if (!DMSService.isConnected || !DMSService.capabilities.includes("dbus"))
+            return;
+        if (lidSubscriptionId || lidSubscriptionPending)
+            return;
+
+        lidSubscriptionPending = true;
+        DMSService.dbusSubscribe("system", "org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.DBus.Properties", "PropertiesChanged", response => {
+            lidSubscriptionPending = false;
+            if (response.error) {
+                log.warn("Failed to subscribe to lid changes:", response.error);
+                return;
+            }
+            lidSubscriptionId = response.result?.subscriptionId || "";
+        });
+    }
+
+    function handleLidPropertiesChanged(data) {
+        if (data?.path !== "/org/freedesktop/UPower" || data.body?.[0] !== "org.freedesktop.UPower")
+            return;
+        if (data.body?.[1]?.LidIsClosed === false)
+            lidOpened();
     }
 
     function ensurePrepareForSleepSubscription() {

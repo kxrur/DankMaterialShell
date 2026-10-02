@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Common
+import qs.Modules.DankBar
 import qs.Modules.Plugins
 import qs.Services
 import qs.Widgets
@@ -78,9 +79,9 @@ BasePill {
                     id: rotationAnimation
                     from: 0
                     to: 360
-                    duration: 1000
+                    duration: Theme.expressiveDurations.extraLarge
                     loops: Animation.Infinite
-                    running: root.isChecking
+                    running: root.isChecking && root.surfaceLive
 
                     onRunningChanged: {
                         if (!running)
@@ -90,14 +91,14 @@ BasePill {
             }
 
             Rectangle {
-                width: 8
-                height: 8
-                radius: 4
+                width: BarMetrics.badgeSize
+                height: BarMetrics.badgeSize
+                radius: Theme.cornerRadiusFull
                 color: Theme.error
                 anchors.right: parent.right
                 anchors.top: parent.top
-                anchors.rightMargin: (barConfig?.removeWidgetPadding ?? false) ? 0 : 6
-                anchors.topMargin: (barConfig?.removeWidgetPadding ?? false) ? 0 : 6
+                anchors.rightMargin: (barConfig?.widgetPadding ?? 8) === 0 ? 0 : BarMetrics.badgeInset
+                anchors.topMargin: (barConfig?.widgetPadding ?? 8) === 0 ? 0 : BarMetrics.badgeInset
                 visible: root.isVerticalOrientation && root.hasUpdates && !root.isChecking
             }
 
@@ -133,9 +134,9 @@ BasePill {
                         id: rotationAnimationHorizontal
                         from: 0
                         to: 360
-                        duration: 1000
+                        duration: Theme.expressiveDurations.extraLarge
                         loops: Animation.Infinite
-                        running: root.isChecking
+                        running: root.isChecking && root.surfaceLive
 
                         onRunningChanged: {
                             if (!running)
@@ -165,13 +166,7 @@ BasePill {
         cursorShape: Qt.PointingHandCursor
         onPressed: mouse => {
             root.triggerRipple(this, mouse.x, mouse.y);
-            if (popoutTarget && popoutTarget.setTriggerPosition) {
-                const globalPos = root.visualContent.mapToItem(null, 0, 0);
-                const currentScreen = parentScreen || Screen;
-                const barPosition = root.axis?.edge === "left" ? 2 : (root.axis?.edge === "right" ? 3 : (root.axis?.edge === "top" ? 0 : 1));
-                const pos = SettingsData.getPopupTriggerPosition(globalPos, currentScreen, barThickness, root.visualWidth, root.barSpacing, barPosition, root.barConfig);
-                popoutTarget.setTriggerPosition(pos.x, pos.y, pos.width, section, currentScreen, barPosition, barThickness, root.barSpacing, root.barConfig);
-            }
+            root.positionPopout(popoutTarget);
             root.clicked();
         }
     }

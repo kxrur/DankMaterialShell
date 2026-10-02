@@ -1,6 +1,8 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import qs.Common
+import qs.Modals.DankLauncherV2.Components
 import qs.Services
 
 Item {
@@ -20,11 +22,11 @@ Item {
     readonly property var spotlightContent: usingFallback ? fallback.spotlightContent : null
     readonly property bool openedFromOverview: usingFallback ? fallback.openedFromOverview : false
     readonly property var effectiveScreen: usingFallback ? fallback.effectiveScreen : null
-    readonly property real screenWidth: usingFallback ? fallback.screenWidth : 1920
-    readonly property real screenHeight: usingFallback ? fallback.screenHeight : 1080
+    readonly property real screenWidth: usingFallback ? fallback.screenWidth : Theme.mediumBreakpoint * 2
+    readonly property real screenHeight: usingFallback ? fallback.screenHeight : Theme.mediumBreakpoint
     readonly property real dpr: usingFallback ? fallback.dpr : 1
-    readonly property int modalWidth: usingFallback ? fallback.modalWidth : 680
-    readonly property int modalHeight: usingFallback ? fallback.modalHeight : 560
+    readonly property int modalWidth: usingFallback ? fallback.modalWidth : LauncherMetrics.sizeWidth(SettingsData.dankLauncherV2Size)
+    readonly property int modalHeight: usingFallback ? fallback.modalHeight : LauncherMetrics.sizeHeight(SettingsData.dankLauncherV2Size)
     readonly property real modalX: usingFallback ? fallback.modalX : 0
     readonly property real modalY: usingFallback ? fallback.modalY : 0
     readonly property bool frameOwnsConnectedChrome: false
@@ -33,13 +35,21 @@ Item {
 
     signal dialogClosed
 
+    // Last-used routing already went through PopoutService, so a standard bar owns the launcher here.
+    function _lastUsedOwnsLauncher() {
+        return SettingsData.sharedShortcutsFollowLastUsed(CompositorService.getFocusedScreen());
+    }
+
     function _openIsland(query, mode) {
+        if (root._lastUsedOwnsLauncher()) {
+            usingFallback = true;
+            return false;
+        }
         const accepted = router?.openLauncher?.(query || "", mode || "") ?? false;
         if (accepted) {
             usingFallback = false;
             return true;
         }
-        log.warn("No DankIsland is routed to the focused screen; falling back to Spotlight");
         usingFallback = true;
         return false;
     }
@@ -64,11 +74,16 @@ Item {
             fallback.hide();
             return;
         }
-        router?.closeLauncher?.();
+        PopoutService.closeIslandActivity("launcher");
     }
 
     function toggle() {
         if (usingFallback && fallback.spotlightOpen) {
+            fallback.toggle();
+            return;
+        }
+        if (root._lastUsedOwnsLauncher()) {
+            usingFallback = true;
             fallback.toggle();
             return;
         }
@@ -108,9 +123,11 @@ Item {
         dialogClosed();
     }
 
-    DankLauncherV2ModalSpotlight {
+    DankLauncherV2ModalHost {
         id: fallback
 
+        connected: root.modalHandle?._resolvedConnected ?? false
+        spotlight: !connected
         modalHandle: root.modalHandle
         triggerUsesOverlayLayer: root.triggerUsesOverlayLayer
     }

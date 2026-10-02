@@ -19,15 +19,15 @@ PluginComponent {
 
             DankIcon {
                 name: root.displayIcon
-                size: Theme.iconSize - 8
+                size: root.iconSize
                 color: Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
             }
 
             StyledText {
                 text: root.displayText
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: Font.Medium
+                font.pixelSize: root.textSize
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -40,15 +40,15 @@ PluginComponent {
 
             DankIcon {
                 name: root.displayIcon
-                size: Theme.iconSize - 8
+                size: root.iconSize
                 color: Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
             StyledText {
                 text: root.displayText
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: Font.Medium
+                font.pixelSize: root.textSize
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
             }

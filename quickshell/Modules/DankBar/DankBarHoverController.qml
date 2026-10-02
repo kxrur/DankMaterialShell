@@ -27,8 +27,6 @@ Item {
     property bool _barHovered: false
     property var _pendingHoverHit: null
     property string _pendingHoverTrigger: ""
-    property var _deferredReopenHit: null
-    property string _deferredReopenTrigger: ""
     property string _hoverReopenSuppressedTrigger: ""
 
     property bool _candidateCacheValid: false
@@ -70,13 +68,9 @@ Item {
         }
     }
 
-    Connections {
-        target: root.barWindow
+    readonly property var barWindowScreen: root.barWindow?.screen ?? null
 
-        function onScreenChanged() {
-            root.invalidateCandidateCache();
-        }
-    }
+    onBarWindowScreenChanged: invalidateCandidateCache()
 
     Connections {
         target: PopoutManager
@@ -165,7 +159,7 @@ Item {
         _cancelPendingHover();
         _hoverCloseTimer.stop();
         _hoverReopenSuppressedTrigger = "";
-        barContent._pendingPopoutOpenSpec = null;
+        barContent.cancelQueuedWidgetPopout();
 
         const activePopout = PopoutManager.getActivePopout(barWindow?.screen);
         const hasTransientSurface = activeHoverTrigger !== "" || activePopout?.hoverDismissEnabled === true;
@@ -227,7 +221,6 @@ Item {
         return root.sections || [];
     }
 
-    // The widget registry is keyed by (widgetId, screenName)
     function _itemBelongsToThisBar(item) {
         const owner = root.widgetOwner || barContent;
         if (!owner || !item)
@@ -244,6 +237,10 @@ Item {
     }
 
     function _findWidgetHostInWrapper(wrapper) {
+        if (wrapper.inOverflow)
+            return null;
+        if (wrapper.host)
+            return wrapper.host;
         if (wrapper.widgetId !== undefined)
             return wrapper;
         const children = wrapper.children || [];
@@ -456,16 +453,25 @@ Item {
         return candidates;
     }
 
+    Connections {
+        target: root.barWindow?.hostWindow ?? null
+        function onMarginsChanged() {
+            root.invalidateCandidateCache();
+        }
+    }
+
     function _globalItemBounds(item) {
-        const topLeft = barContent.mapItemToScreen(item, 0, 0);
-        if (!topLeft)
+        try {
+            const topLeft = barContent.surfaceContext.screenPoint(item, 0, 0);
+            return {
+                x: topLeft.x,
+                y: topLeft.y,
+                width: item.width,
+                height: item.height
+            };
+        } catch (e) {
             return null;
-        return {
-            x: topLeft.x,
-            y: topLeft.y,
-            width: item.width,
-            height: item.height
-        };
+        }
     }
 
     function _hitBoundsForWidget(widgetItem, wrapper) {
@@ -671,33 +677,10 @@ Item {
         const hadStaleTrigger = activeHoverTrigger !== "" && !hasOpenHoverSurface();
         if (hadStaleTrigger)
             activeHoverTrigger = "";
-        if (_commitDeferredReopen())
-            return;
         // A cursor resting on the trigger emits no further points; retest so the popout
         // reopens without needing the cursor to leave and come back.
         if (hadStaleTrigger && _barHovered && hoverPopoutsEnabled)
             recheckLatestPoint();
-    }
-
-    function _commitDeferredReopen() {
-        const hit = _deferredReopenHit;
-        const triggerKey = _deferredReopenTrigger;
-        if (!hit)
-            return false;
-        _deferredReopenHit = null;
-        _deferredReopenTrigger = "";
-        if (!_barHovered || !hoverPopoutsEnabled || isActiveHoverSurfacePinned() || hasOpenHoverSurface())
-            return true;
-        const gx = _lastHoverGlobalX;
-        const gy = _lastHoverGlobalY;
-        const liveHit = findWidgetAtGlobalPoint(gx, gy);
-        if (!liveHit || _triggerKeyForHit(liveHit, gx, gy) !== triggerKey)
-            return true;
-        liveHit.globalX = gx;
-        liveHit.globalY = gy;
-        if (openHoverPopoutForHit(liveHit))
-            activeHoverTrigger = triggerKey;
-        return true;
     }
 
     function _suppressReopenAfterToggleClose(screenName) {
@@ -845,7 +828,7 @@ Item {
 
         _hoverCloseTimer.stop();
 
-        if (triggerKey === activeHoverTrigger && hasOpenHoverSurface()) {
+        if (triggerKey === activeHoverTrigger && hasOpenHoverSurface() && PopoutManager.getActivePopout(barWindow?.screen)?.isClosing !== true) {
             _cancelPendingHover();
             return;
         }
@@ -864,8 +847,6 @@ Item {
         _hoverIntentTimer.stop();
         _pendingHoverHit = null;
         _pendingHoverTrigger = "";
-        _deferredReopenHit = null;
-        _deferredReopenTrigger = "";
     }
 
     function _hitTargetsActivePopout(hit) {
@@ -875,7 +856,7 @@ Item {
         const loader = _loaderForWidgetId(hit.widgetId);
         if (!loader)
             return false;
-        return barContent._resolvePopoutFromLoader(loader) === active;
+        return barContent.resolvePopoutFromLoader(loader) === active;
     }
 
     function _commitPendingHover() {
@@ -892,15 +873,7 @@ Item {
 
         const activePopout = PopoutManager.getActivePopout(barWindow?.screen);
         const targetLoader = _loaderForWidgetId(hit.widgetId);
-        const targetPopout = barContent._resolvePopoutFromLoader(targetLoader);
-
-        // requestHoverPopout is ignored while the target's close animation runs;
-        // hold the hit and reopen the moment hidePopout lands.
-        if (targetPopout && targetPopout === activePopout && targetPopout.isClosing) {
-            _deferredReopenHit = hit;
-            _deferredReopenTrigger = triggerKey;
-            return;
-        }
+        const targetPopout = barContent.resolvePopoutFromLoader(targetLoader);
 
         const managerOwnsTransition = !!(activePopout && targetPopout);
 

@@ -101,7 +101,6 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     text: I18n.tr("You're All Set!", "greeter completion page title")
                     font.pixelSize: Theme.fontSizeXLarge
-                    font.weight: Font.Bold
                     color: Theme.surfaceText
                 }
             }
@@ -124,7 +123,7 @@ Item {
                     StyledText {
                         text: I18n.tr("Layout")
                         font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -161,7 +160,7 @@ Item {
                     StyledText {
                         text: I18n.tr("DMS Shortcuts", "greeter keybinds section header")
                         font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -173,6 +172,8 @@ Item {
                     height: keybindsGrid.height + Theme.spacingM * 2
                     radius: Theme.cornerRadius
                     color: Theme.floatingWindowNestedSurface
+                    border.width: Theme.layerOutlineWidth
+                    border.color: Theme.outlineMedium
 
                     readonly property bool useTwoColumns: width > 500
                     readonly property int columnCount: useTwoColumns ? 2 : 1
@@ -252,6 +253,8 @@ Item {
                 height: noKeybindsColumn.height + Theme.spacingM * 2
                 radius: Theme.cornerRadius
                 color: Theme.floatingWindowNestedSurface
+                border.width: Theme.layerOutlineWidth
+                border.color: Theme.outlineMedium
                 visible: !root.hasKeybinds
 
                 Column {
@@ -284,7 +287,7 @@ Item {
                         width: parent.width
                         height: Math.round(Theme.fontSizeMedium * 2.85)
                         radius: Theme.cornerRadius
-                        color: Theme.surfaceContainerHighest
+                        color: Theme.chipSurface
 
                         Rectangle {
                             anchors.fill: parent
@@ -307,7 +310,7 @@ Item {
                             StyledText {
                                 text: I18n.tr("Configure Keybinds", "greeter configure keybinds link")
                                 font.pixelSize: Theme.fontSizeSmall
-                                font.weight: Font.Medium
+                                font.weight: Theme.fontWeightMedium
                                 color: Theme.primary
                                 anchors.verticalCenter: parent.verticalCenter
                             }
@@ -326,13 +329,13 @@ Item {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                let url = "https://danklinux.com/docs/dankmaterialshell/keybinds-ipc";
+                                let url = Site.docs + "/dankmaterialshell/keybinds-ipc";
                                 if (CompositorService.isNiri)
-                                    url = "https://danklinux.com/docs/dankmaterialshell/compositors#dms-keybindings";
+                                    url = Site.docs + "/dankmaterialshell/compositors#dms-keybindings";
                                 else if (CompositorService.isHyprland)
-                                    url = "https://danklinux.com/docs/dankmaterialshell/compositors#dms-keybindings-1";
+                                    url = Site.docs + "/dankmaterialshell/compositors#dms-keybindings-1";
                                 else if (CompositorService.isMango)
-                                    url = "https://danklinux.com/docs/dankmaterialshell/compositors#dms-keybindings-2";
+                                    url = Site.docs + "/dankmaterialshell/compositors#dms-keybindings-2";
                                 Qt.openUrlExternally(url);
                             }
                         }
@@ -366,7 +369,7 @@ Item {
                     StyledText {
                         text: I18n.tr("Configure", "greeter settings section header")
                         font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -397,7 +400,7 @@ Item {
                     GreeterSettingsCard {
                         width: (parent.width - Theme.spacingS) / 2
                         iconName: "format_paint"
-                        title: I18n.tr("Theme & Colors", "greeter settings link")
+                        title: I18n.tr("Theme & colors", "greeter settings link")
                         description: I18n.tr("Dynamic colors, presets", "greeter theme description")
                         onClicked: PopoutService.openSettingsWithTab("theme")
                     }
@@ -433,7 +436,7 @@ Item {
                         title: I18n.tr("Dock", "greeter settings link")
                         description: I18n.tr("Position, pinned apps", "greeter dock description")
                         visible: !KeybindsService.available
-                        onClicked: PopoutService.openSettingsWithTab("dock")
+                        onClicked: PopoutService.openSettingsWithTab("dock_general")
                     }
                 }
             }
@@ -463,7 +466,7 @@ Item {
                     StyledText {
                         text: I18n.tr("Explore", "greeter explore section header")
                         font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
+                        font.weight: Theme.fontWeightMedium
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -478,7 +481,7 @@ Item {
                         iconName: "menu_book"
                         title: I18n.tr("Docs", "greeter documentation link")
                         isExternal: true
-                        onClicked: Qt.openUrlExternally("https://danklinux.com/docs")
+                        onClicked: Qt.openUrlExternally(Site.docs)
                     }
 
                     GreeterQuickLink {
@@ -486,7 +489,7 @@ Item {
                         iconName: "palette"
                         title: I18n.tr("Themes", "greeter themes link")
                         isExternal: true
-                        onClicked: Qt.openUrlExternally("https://danklinux.com/plugins?tab=themes")
+                        onClicked: Qt.openUrlExternally(Site.web + "/plugins?tab=themes")
                     }
                 }
             }

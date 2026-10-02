@@ -44,6 +44,8 @@ Singleton {
     property var powerMenuModalLoader: null
     property var powerMenuPopout: null
     property var powerMenuPopoutLoader: null
+    property var durationPopout: null
+    property var durationPopoutLoader: null
     property var processListModal: null
     property var processListModalLoader: null
     property var colorPickerModal: null
@@ -71,18 +73,64 @@ Singleton {
     // Deferred unload: keep popouts warm while the session is active and reclaim them on lock/monitors-off.
     property var _pendingUnloads: ({})
 
+    property var _rewarmKeys: []
+
     Connections {
         target: SessionService
         function onSessionLocked() {
             root._flushPendingUnloads();
+        }
+        function onSessionUnlocked() {
+            root._scheduleRewarm();
         }
     }
 
     Connections {
         target: IdleService
         function onMonitorsOffChanged() {
-            if (IdleService.monitorsOff)
+            if (IdleService.monitorsOff) {
                 root._flushPendingUnloads();
+                return;
+            }
+            root._scheduleRewarm();
+        }
+    }
+
+    function _rewarmBlocked() {
+        return IdleService.isShellLocked || IdleService.monitorsOff;
+    }
+
+    function _scheduleRewarm() {
+        if (!_rewarmKeys.length || _rewarmBlocked())
+            return;
+        rewarmTimer.restart();
+    }
+
+    function _rewarmPopout(key, popoutName, loaderName) {
+        const loader = root[loaderName];
+        if (!loader)
+            return;
+        loader.active = true;
+        const popout = root[popoutName];
+        if (!popout)
+            return;
+        if (!popout.triggerScreen)
+            popout.triggerScreen = CompositorService.getFocusedScreen() ?? Quickshell.screens[0] ?? null;
+        popout.warmContent();
+        _scheduleUnload(key);
+    }
+
+    Timer {
+        id: rewarmTimer
+        interval: 1500
+        onTriggered: {
+            if (root._rewarmBlocked())
+                return;
+            const key = root._rewarmKeys[0];
+            root._rewarmKeys = root._rewarmKeys.slice(1);
+            root._rewarmers[key]();
+            if (root._rewarmKeys.length)
+                restart();
         }
     }
 
@@ -93,6 +141,8 @@ Singleton {
     function _flushPendingUnloads() {
         const keys = Object.keys(_pendingUnloads);
         _pendingUnloads = ({});
+        rewarmTimer.stop();
+        _rewarmKeys = _rewarmKeys.concat(keys.filter(key => _rewarmers[key] && !_rewarmKeys.includes(key)));
         for (let i = 0; i < keys.length; i++) {
             const unload = _deferredUnloaders[keys[i]];
             if (unload)
@@ -114,6 +164,12 @@ Singleton {
         loader.active = false;
     }
 
+    readonly property var _rewarmers: ({
+            "dankDash": () => _rewarmPopout("dankDash", "dankDashPopout", "dankDashPopoutLoader"),
+            "controlCenter": () => _rewarmPopout("controlCenter", "controlCenterPopout", "controlCenterLoader"),
+            "notificationCenter": () => _rewarmPopout("notificationCenter", "notificationCenterPopout", "notificationCenterLoader")
+        })
+
     readonly property var _deferredUnloaders: ({
             "dankDash": () => _unloadPopoutNow("dankDashPopout", "dankDashPopoutLoader"),
             "controlCenter": () => _unloadPopoutNow("controlCenterPopout", "controlCenterLoader"),
@@ -124,6 +180,7 @@ Singleton {
             "vpn": () => _unloadPopoutNow("vpnPopout", "vpnPopoutLoader"),
             "colorPicker": () => _unloadPopoutNow("colorPickerPopout", "colorPickerPopoutLoader"),
             "powerMenuPopout": () => _unloadPopoutNow("powerMenuPopout", "powerMenuPopoutLoader"),
+            "duration": () => _unloadPopoutNow("durationPopout", "durationPopoutLoader"),
             "systemUpdate": () => _unloadPopoutNow("systemUpdatePopout", "systemUpdateLoader"),
             "layout": () => _unloadPopoutNow("layoutPopout", "layoutPopoutLoader"),
             "clipboardHistory": () => _unloadPopoutNow("clipboardHistoryPopout", "clipboardHistoryPopoutLoader"),
@@ -136,21 +193,30 @@ Singleton {
         }
     }
 
-    function _islandOwnsSharedTrigger(screen) {
-        const target = screen ?? dankIslandRouter?.focusedIslandScreen?.() ?? null;
-        if (dankIslandRouter?.hasHostForScreen?.(target) !== true)
-            return false;
-        return SettingsData.dankIslandIsSoleBarForScreen(target);
+    function _sharedTriggerIsland(screen, activity) {
+        const target = screen ?? CompositorService.getFocusedScreen();
+        const config = target ? SettingsData.sharedTriggerIslandConfig(target, activity) : null;
+        if (!config || dankIslandRouter?.hasHostForScreen?.(target, config.id) !== true)
+            return null;
+        return {
+            screen: target,
+            barId: config.id
+        };
     }
 
     readonly property bool islandControlCenterOpen: dankIslandRouter?.controlCenterOpen ?? false
 
-    function routeToIsland(activityId, screen, shouldToggle, section) {
-        if (!_islandOwnsSharedTrigger(screen))
+    function routeToIsland(activityId, screen, shouldToggle, section, barId) {
+        if (barId && dankIslandRouter?.hasHostForScreen(screen, barId) !== true)
             return false;
+        const shared = barId ? null : _sharedTriggerIsland(screen, activityId);
+        if (!barId && !shared)
+            return false;
+        const targetScreen = shared?.screen ?? screen ?? null;
+        const targetBar = barId || shared.barId;
         if (shouldToggle === true)
-            return dankIslandRouter.toggleActivity(activityId, screen ?? null, section || "") === true;
-        return dankIslandRouter.openActivity(activityId, screen ?? null, section || "") === true;
+            return dankIslandRouter.toggleActivity(activityId, targetScreen, section || "", targetBar) === true;
+        return dankIslandRouter.openActivity(activityId, targetScreen, section || "", targetBar) === true;
     }
 
     function closeIslandActivity(activityId) {
@@ -167,8 +233,7 @@ Singleton {
     }
 
     function closeControlCenter() {
-        if (closeIslandActivity("controlcenter"))
-            return;
+        closeIslandActivity("controlcenter");
         controlCenterPopout?.close();
     }
 
@@ -195,8 +260,7 @@ Singleton {
     }
 
     function closeNotificationCenter() {
-        if (closeIslandActivity("notificationcenter"))
-            return;
+        closeIslandActivity("notificationcenter");
         notificationCenterPopout?.close();
     }
 
@@ -259,6 +323,7 @@ Singleton {
 
     property bool _dankDashWantsOpen: false
     property bool _dankDashWantsToggle: false
+    property bool _dankDashWantsEdit: false
     property var _dankDashPendingTab: 0
     property real _dankDashPendingX: 0
     property real _dankDashPendingY: 0
@@ -276,21 +341,13 @@ Singleton {
         _dankDashHasPosition = hasPos;
     }
 
-    // `tab` is a view id ("weather"); a numeric index into the visible tabs is
-    // still accepted for plugin compatibility.
-    function _dankDashTabId(tab) {
-        if (typeof tab === "string" && tab !== "")
-            return tab;
-        const ids = SettingsData.visibleDashTabIds();
-        return ids[typeof tab === "number" ? tab : 0] ?? "overview";
-    }
-
     function openDankDash(tab, x, y, width, section, screen) {
+        _dankDashWantsEdit = false;
         _dankDashPendingTab = tab || 0;
         if (dankDashPopout) {
             if (arguments.length >= 6)
                 setPosition(dankDashPopout, x, y, width, section, screen);
-            dankDashPopout.requestTab(_dankDashTabId(_dankDashPendingTab));
+            dankDashPopout.requestTab(_dankDashPendingTab);
             dankDashPopout.dashVisible = true;
             return;
         }
@@ -303,11 +360,13 @@ Singleton {
     }
 
     function closeDankDash() {
+        _dankDashWantsEdit = false;
         if (dankDashPopout)
             dankDashPopout.dashVisible = false;
     }
 
     function toggleDankDash(tab, x, y, width, section, screen) {
+        _dankDashWantsEdit = false;
         _dankDashPendingTab = tab || 0;
         if (dankDashPopout) {
             if (arguments.length >= 6)
@@ -315,7 +374,7 @@ Singleton {
             if (dankDashPopout.dashVisible) {
                 dankDashPopout.dashVisible = false;
             } else {
-                dankDashPopout.requestTab(_dankDashTabId(_dankDashPendingTab));
+                dankDashPopout.requestTab(_dankDashPendingTab);
                 dankDashPopout.dashVisible = true;
             }
             return;
@@ -332,12 +391,17 @@ Singleton {
         if (!dankDashPopout)
             return;
 
+        if (_dankDashWantsEdit) {
+            _showDankDashEditor();
+            return;
+        }
+
         if (_dankDashHasPosition)
             setPosition(dankDashPopout, _dankDashPendingX, _dankDashPendingY, _dankDashPendingWidth, _dankDashPendingSection, _dankDashPendingScreen);
 
         if (_dankDashWantsOpen) {
             _dankDashWantsOpen = false;
-            dankDashPopout.requestTab(_dankDashTabId(_dankDashPendingTab));
+            dankDashPopout.requestTab(_dankDashPendingTab);
             dankDashPopout.dashVisible = true;
             return;
         }
@@ -346,10 +410,38 @@ Singleton {
             if (dankDashPopout.dashVisible) {
                 dankDashPopout.dashVisible = false;
             } else {
-                dankDashPopout.requestTab(_dankDashTabId(_dankDashPendingTab));
+                dankDashPopout.requestTab(_dankDashPendingTab);
                 dankDashPopout.dashVisible = true;
             }
         }
+    }
+
+    function openDankDashEditor(tab, screen) {
+        const target = screen ?? Quickshell.screens.find(candidate => candidate.name === CompositorService.getFocusedScreenName()) ?? Quickshell.screens[0];
+        if (!target || (!dankDashPopout && !dankDashPopoutLoader))
+            return;
+        closeSettings();
+        _dankDashPendingTab = tab;
+        _dankDashPendingScreen = target;
+        _dankDashHasPosition = false;
+        _dankDashWantsOpen = false;
+        _dankDashWantsToggle = false;
+        _dankDashWantsEdit = true;
+        if (dankDashPopout) {
+            _showDankDashEditor();
+            return;
+        }
+        dankDashPopoutLoader.active = true;
+    }
+
+    function _showDankDashEditor() {
+        _dankDashWantsEdit = false;
+        const target = _dankDashPendingScreen;
+        const anchor = BarWidgetService.naturalPopoutAnchor(target, null, "center");
+        dankDashPopout.setTriggerPosition(anchor.trigger.x, anchor.trigger.y, anchor.trigger.width, anchor.section, target, anchor.position, anchor.thickness, anchor.spacing, anchor.config);
+        dankDashPopout.requestTab(_dankDashPendingTab);
+        dankDashPopout.editMode = true;
+        dankDashPopout.dashVisible = true;
     }
 
     function openBattery(x, y, width, section, screen) {
@@ -546,8 +638,7 @@ Singleton {
 
     function toggleSettingsWithTab(tabName: string) {
         if (settingsModal) {
-            var idx = settingsModal.resolveTabIndex(tabName);
-            settingsModal.setTabIndex(idx);
+            settingsModal.setPageName(tabName);
             settingsModal.toggle();
             return;
         }
@@ -586,8 +677,7 @@ Singleton {
                     settingsModal.hide();
                     return;
                 }
-                var idx = settingsModal.resolveTabIndex(tabName);
-                settingsModal.setTabIndex(idx);
+                settingsModal.setPageName(tabName);
                 CompositorService.activateToplevel(toplevel);
                 return;
             }
@@ -625,8 +715,7 @@ Singleton {
                 settingsModal?.setTabIndex(_settingsPendingTabIndex);
                 _settingsPendingTabIndex = -1;
             } else if (_settingsPendingTab) {
-                var idx = settingsModal?.resolveTabIndex(_settingsPendingTab) ?? -1;
-                settingsModal?.setTabIndex(idx);
+                settingsModal?.setPageName(_settingsPendingTab);
                 _settingsPendingTab = "";
             }
             settingsModal?.toggle();
@@ -634,11 +723,24 @@ Singleton {
     }
 
     function openClipboardHistory() {
+        if (routeToIsland("clipboard", null, false))
+            return;
         clipboardHistoryModal?.show();
     }
 
     function closeClipboardHistory() {
+        closeIslandActivity("clipboard");
         clipboardHistoryModal?.hide();
+    }
+
+    function toggleClipboardHistory() {
+        if (clipboardHistoryModal?.shouldBeVisible) {
+            clipboardHistoryModal.hide();
+            return;
+        }
+        if (routeToIsland("clipboard", null, true))
+            return;
+        clipboardHistoryModal?.toggle();
     }
 
     function unloadClipboardHistoryPopout() {
@@ -671,7 +773,19 @@ Singleton {
             dankLauncherV2Modal.edgeHoverManaged = _dankLauncherV2EdgeHoverManaged;
     }
 
+    function _routeSharedLauncher(query, mode, toggle) {
+        const screen = CompositorService.getFocusedScreen();
+        if (!SettingsData.sharedShortcutsOverridden(screen, "launcher"))
+            return false;
+        const shared = _sharedTriggerIsland(screen, "launcher");
+        if (!shared)
+            return false;
+        return toggle ? dankIslandRouter.toggleLauncher(query, mode, shared.screen, shared.barId) : dankIslandRouter.openLauncher(query, mode, shared.screen, shared.barId);
+    }
+
     function openDankLauncherV2(triggerUsesOverlayLayer, edgeHoverManaged) {
+        if (_routeSharedLauncher("", "", false))
+            return;
         _setDankLauncherV2TriggerUsesOverlayLayer(triggerUsesOverlayLayer);
         _setDankLauncherV2EdgeHoverManaged(edgeHoverManaged);
         if (dankLauncherV2Modal) {
@@ -684,6 +798,8 @@ Singleton {
     }
 
     function openDankLauncherV2WithQuery(query: string, triggerUsesOverlayLayer) {
+        if (_routeSharedLauncher(query, "", false))
+            return;
         _setDankLauncherV2TriggerUsesOverlayLayer(triggerUsesOverlayLayer);
         if (dankLauncherV2Modal) {
             dankLauncherV2Modal.showWithQuery(query);
@@ -696,6 +812,8 @@ Singleton {
     }
 
     function openDankLauncherV2WithMode(mode: string, triggerUsesOverlayLayer) {
+        if (_routeSharedLauncher("", mode, false))
+            return;
         _setDankLauncherV2TriggerUsesOverlayLayer(triggerUsesOverlayLayer);
         if (dankLauncherV2Modal) {
             dankLauncherV2Modal.showWithMode(mode);
@@ -708,6 +826,7 @@ Singleton {
     }
 
     function closeDankLauncherV2() {
+        closeIslandActivity("launcher");
         dankLauncherV2Modal?.hide();
     }
 
@@ -719,6 +838,8 @@ Singleton {
     }
 
     function toggleDankLauncherV2(triggerUsesOverlayLayer) {
+        if (_routeSharedLauncher("", "", true))
+            return;
         _setDankLauncherV2TriggerUsesOverlayLayer(triggerUsesOverlayLayer);
         if (dankLauncherV2Modal) {
             dankLauncherV2Modal.toggle();
@@ -730,6 +851,8 @@ Singleton {
     }
 
     function toggleDankLauncherV2WithMode(mode: string, triggerUsesOverlayLayer) {
+        if (_routeSharedLauncher("", mode, true))
+            return;
         _setDankLauncherV2TriggerUsesOverlayLayer(triggerUsesOverlayLayer);
         if (dankLauncherV2Modal) {
             dankLauncherV2Modal.toggleWithMode(mode);
@@ -742,6 +865,8 @@ Singleton {
     }
 
     function toggleDankLauncherV2WithQuery(query: string, triggerUsesOverlayLayer) {
+        if (_routeSharedLauncher(query, "", true))
+            return;
         _setDankLauncherV2TriggerUsesOverlayLayer(triggerUsesOverlayLayer);
         if (dankLauncherV2Modal) {
             dankLauncherV2Modal.toggleWithQuery(query);
@@ -975,6 +1100,10 @@ Singleton {
 
     function unloadPowerMenuPopout() {
         _scheduleUnload("powerMenuPopout");
+    }
+
+    function unloadDurationPopout() {
+        _scheduleUnload("duration");
     }
 
     function ensureBluetoothPairingModal() {

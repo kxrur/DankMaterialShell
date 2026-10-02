@@ -6,28 +6,27 @@ import qs.Widgets
 Item {
     id: root
 
-    width: parent.width
-    height: 200
+    anchors.fill: parent
     visible: NotificationService.notifications.length === 0
 
     Column {
         anchors.centerIn: parent
-        spacing: Theme.spacingXS
-        width: parent.width * 0.8
+        width: parent.width
+        spacing: Theme.spacingM
 
         DankIcon {
             anchors.horizontalCenter: parent.horizontalCenter
-            name: "notifications_none"
-            size: Theme.iconSizeLarge + 16
-            color: Theme.surfaceTextAlpha
+            name: "emoji_events"
+            size: Theme.iconSizeLarge + Theme.spacingL
+            color: Theme.onSurfaceVariant
         }
 
         StyledText {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: I18n.tr("Nothing to see here")
+            text: I18n.tr("You're all caught up", "notification center empty state, no notifications left to read")
             font.pixelSize: Theme.fontSizeLarge
-            color: Theme.surfaceTextAlpha
-            font.weight: Font.Medium
+            color: Theme.onSurfaceVariant
+            font.weight: Theme.fontWeightMedium
             horizontalAlignment: Text.AlignHCenter
         }
     }

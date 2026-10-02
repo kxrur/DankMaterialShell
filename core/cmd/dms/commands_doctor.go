@@ -20,6 +20,7 @@ import (
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/matugen"
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/server/brightness"
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/server/network"
+	"github.com/AvengeMedia/DankMaterialShell/core/internal/site"
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/tui"
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/utils"
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/version"
@@ -97,6 +98,7 @@ var (
 	miracleVersionRegex    = regexp.MustCompile(`miracle-wm v?(\d+\.\d+\.\d+)`)
 	scrollVersionRegex     = regexp.MustCompile(`scroll version (\d+\.\d+)`)
 	aqueousVersionRegex    = regexp.MustCompile(`(?i)aqueous v?(\d+\.\d+(?:\.\d+)?)`)
+	umbrielVersionRegex    = regexp.MustCompile(`umbriel (\d+\.\d+\.\d+)`)
 )
 
 var doctorCmd = &cobra.Command{
@@ -162,7 +164,7 @@ func (c category) String() string {
 
 const (
 	checkNameMaxLength = 21
-	doctorDocsURL      = "https://danklinux.com/docs/dankmaterialshell/cli-doctor"
+	doctorDocsURL      = site.Docs + "/dankmaterialshell/cli-doctor"
 )
 
 type checkResult struct {
@@ -743,6 +745,7 @@ func checkWindowManagers() []checkResult {
 		{"Miracle WM", "miracle-wm", "--version", miracleVersionRegex, []string{"miracle-wm"}},
 		{"Scroll", "scroll", "--version", scrollVersionRegex, []string{"scroll"}},
 		{"Aqueous", "aqueous", "-version", aqueousVersionRegex, []string{"aqueous"}},
+		{"Umbriel", "umbriel", "--version", umbrielVersionRegex, []string{"umbriel"}},
 	}
 
 	var results []checkResult
@@ -775,7 +778,7 @@ func checkWindowManagers() []checkResult {
 		results = append(results, checkResult{
 			catCompositor, "Compositor", statusError,
 			"No supported Wayland compositor found",
-			"Install Hyprland, niri, Sway, River, Wayfire, labwc, mangowc, miracle-wm, Scroll, or Aqueous",
+			"Install Hyprland, niri, Sway, River, Wayfire, labwc, mangowc, miracle-wm, Scroll, Aqueous, or Umbriel",
 			doctorDocsURL + "#compositor-checks",
 		})
 	}
@@ -848,6 +851,8 @@ func detectRunningWM() string {
 		return "MangoWC"
 	case os.Getenv("MIRACLESOCK") != "":
 		return "Miracle WM"
+	case os.Getenv("UMBRIEL_SOCKET") != "":
+		return "Umbriel"
 	case os.Getenv("XDG_CURRENT_DESKTOP") != "":
 		return os.Getenv("XDG_CURRENT_DESKTOP")
 	}
@@ -1495,16 +1500,14 @@ func formatResultsPlain(results []checkResult) string {
 }
 
 const (
-	defaultDoctorFontFamily     = "Inter Variable"
+	defaultDoctorFontFamily     = "Google Sans Flex"
 	defaultDoctorMonoFontFamily = "Fira Code"
+	defaultDoctorDisplayFamily  = "DM Serif Display"
 )
 
-// bundledFontRelPaths maps settings/default family names to font files shipped with
-// the shell and loaded via Qt FontLoader (not registered with fontconfig).
 var bundledFontRelPaths = map[string][]string{
-	"inter variable": {
-		"DankCommon/assets/fonts/inter/InterVariable.ttf",
-		"assets/fonts/inter/InterVariable.ttf",
+	"google sans flex": {
+		"DankCommon/assets/fonts/google-sans-flex/GoogleSansFlex.ttf",
 	},
 	"fira code": {
 		"DankCommon/assets/fonts/nerd-fonts/FiraCodeNerdFont-Regular.ttf",
@@ -1513,6 +1516,12 @@ var bundledFontRelPaths = map[string][]string{
 	"firacode nerd font": {
 		"DankCommon/assets/fonts/nerd-fonts/FiraCodeNerdFont-Regular.ttf",
 		"assets/fonts/nerd-fonts/FiraCodeNerdFont-Regular.ttf",
+	},
+	"dm serif display": {
+		"DankCommon/assets/fonts/dm-serif-display/DMSerifDisplay-Regular.ttf",
+	},
+	"notable": {
+		"DankCommon/assets/fonts/notable/Notable-Regular.ttf",
 	},
 }
 
@@ -1625,13 +1634,15 @@ func checkFonts() []checkResult {
 
 	fontFamily := defaultDoctorFontFamily
 	monoFontFamily := defaultDoctorMonoFontFamily
+	displayFontFamily := defaultDoctorDisplayFamily
 
 	if configDir, err := os.UserConfigDir(); err == nil {
 		settingsPath := filepath.Join(configDir, "DankMaterialShell", "settings.json")
 		if data, err := os.ReadFile(settingsPath); err == nil {
 			var settings struct {
-				FontFamily     string `json:"fontFamily"`
-				MonoFontFamily string `json:"monoFontFamily"`
+				FontFamily        string `json:"fontFamily"`
+				MonoFontFamily    string `json:"monoFontFamily"`
+				DisplayFontFamily string `json:"displayFontFamily"`
 			}
 			if err := json.Unmarshal(data, &settings); err == nil {
 				if settings.FontFamily != "" {
@@ -1640,12 +1651,15 @@ func checkFonts() []checkResult {
 				if settings.MonoFontFamily != "" {
 					monoFontFamily = settings.MonoFontFamily
 				}
+				if settings.DisplayFontFamily != "" {
+					displayFontFamily = settings.DisplayFontFamily
+				}
 			}
 		}
 	}
 
 	shellPath := resolveDoctorShellPath()
-	needFontconfig := !isBundledDefaultFont(fontFamily) || !isBundledDefaultFont(monoFontFamily)
+	needFontconfig := !isBundledDefaultFont(fontFamily) || !isBundledDefaultFont(monoFontFamily) || !isBundledDefaultFont(displayFontFamily)
 
 	fcListAvailable := utils.CommandExists("fc-list")
 	fcCache := ""
@@ -1669,6 +1683,7 @@ func checkFonts() []checkResult {
 	results = append(results,
 		checkConfiguredFont("Normal Font", fontFamily, shellPath, fcCache, fcListAvailable, url),
 		checkConfiguredFont("Monospace Font", monoFontFamily, shellPath, fcCache, fcListAvailable, url),
+		checkConfiguredFont("Display Font", displayFontFamily, shellPath, fcCache, fcListAvailable, url),
 	)
 
 	return results

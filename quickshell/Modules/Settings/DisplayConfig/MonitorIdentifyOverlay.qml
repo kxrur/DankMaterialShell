@@ -40,8 +40,9 @@ Variants {
 
             Behavior on opacity {
                 NumberAnimation {
-                    duration: Theme.mediumDuration
-                    easing.type: Theme.emphasizedEasing
+                    duration: Theme.expressiveDurations.expressiveEffects
+                    easing.type: Easing.BezierSpline
+                    easing.bezierCurve: Theme.expressiveCurves.expressiveEffects
                 }
             }
 
@@ -72,7 +73,7 @@ Variants {
                         return identifyWindow.displayName + "  (" + identifyWindow.screen.name + ")  •  " + res;
                     }
                     font.pixelSize: Theme.fontSizeMedium
-                    font.weight: Font.Medium
+                    font.weight: Theme.fontWeightMedium
                     color: Theme.primaryText
                 }
             }

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import qs.Common
 import qs.Services
 import qs.Widgets
@@ -14,6 +15,20 @@ Item {
 
     property var entry: null
     property string editorText: ""
+    property bool textLoaded: false
+    property bool loadFailed: false
+
+    Timer {
+        id: loadTimeoutTimer
+        interval: 5000
+        repeat: false
+        onTriggered: {
+            if (!root.textLoaded) {
+                root.loadFailed = true;
+                ToastService.showError(I18n.tr("Failed to load clipboard entry", "clipboard editor: fetching the entry's full text failed"));
+            }
+        }
+    }
 
     function releaseTextInputFocus() {
         if (editField) {
@@ -68,35 +83,22 @@ Item {
         }
     }
 
-    function setEntry(newEntry) {
-        entry = newEntry;
-        editorText = newEntry?.text ?? newEntry?.preview ?? "";
-        if (editField) {
-            editField.text = editorText;
-        }
-        Qt.callLater(function () {
-            if (editField) {
-                editField.forceActiveFocus();
-                editField.cursorPosition = editField.text.length;
-            }
-        });
-
-        if (!newEntry || newEntry.isImage) {
-            return;
-        }
-
-        const requestedId = newEntry.id;
+    function fetchEntry(requestedId) {
+        loadFailed = false;
+        loadTimeoutTimer.restart();
         DMSService.sendRequest("clipboard.getEntry", {
             "id": requestedId
         }, function (response) {
-            if (response.error) {
-                return;
-            }
+            loadTimeoutTimer.stop();
             if (!root.entry || root.entry.id !== requestedId) {
                 return;
             }
-            if (!response.result) {
-                ClipboardService.refresh();
+            if (response.error || !response.result) {
+                root.loadFailed = true;
+                ToastService.showError(I18n.tr("Failed to load clipboard entry", "clipboard editor: fetching the entry's full text failed"));
+                if (!response.result) {
+                    ClipboardService.refresh();
+                }
                 return;
             }
             const result = response.result;
@@ -108,8 +110,12 @@ Item {
             }
 
             if (!fullText || fullText.length === 0) {
+                root.loadFailed = true;
+                ToastService.showError(I18n.tr("Failed to load clipboard entry", "clipboard editor: fetching the entry's full text failed"));
                 return;
             }
+            root.loadFailed = false;
+            root.textLoaded = true;
             root.editorText = fullText;
             if (editField) {
                 if (fullText.length > 50000) {
@@ -127,15 +133,47 @@ Item {
         });
     }
 
+    function setEntry(newEntry) {
+        entry = newEntry;
+        loadFailed = false;
+        const hasFullText = typeof newEntry?.text === "string";
+        textLoaded = !newEntry || !ClipboardService.canEditEntry(newEntry) || !(newEntry.id > 0) || hasFullText;
+        editorText = newEntry?.text ?? newEntry?.preview ?? "";
+        if (editField) {
+            editField.text = editorText;
+        }
+        Qt.callLater(function () {
+            if (editField) {
+                editField.forceActiveFocus();
+                editField.cursorPosition = editField.text.length;
+            }
+        });
+
+        if (hasFullText || !newEntry || !ClipboardService.canEditEntry(newEntry) || !(newEntry.id > 0)) {
+            loadTimeoutTimer.stop();
+            return;
+        }
+
+        fetchEntry(newEntry.id);
+    }
+
     function saveEntry(action) {
         const saveAction = action ?? "history";
-        DMSService.sendRequest("clipboard.copy", {
-            "text": root.editorText
-        }, function (response) {
-            if (response.error) {
-                ToastService.showError(I18n.tr("Failed to update clipboard"));
-                return;
+        const entryId = root.entry?.id ?? 0;
+
+        if (entryId > 0 && !root.textLoaded) {
+            if (root.loadFailed) {
+                ToastService.showError(I18n.tr("Failed to load clipboard entry", "clipboard editor: fetching the entry's full text failed"));
+                root.fetchEntry(entryId);
+            } else {
+                ToastService.showWarning(I18n.tr("Loading full text, please wait...", "clipboard editor: save blocked while the entry's full text is still being fetched"));
             }
+            return;
+        }
+
+        loadTimeoutTimer.stop();
+
+        const onComplete = function () {
             if (saveAction === "history") {
                 modal.mode = "history";
                 Qt.callLater(function () {
@@ -154,6 +192,27 @@ Item {
             if (saveAction === "paste") {
                 ClipboardService.pasteClipboard(modal.hide);
             }
+        };
+
+        if (entryId > 0) {
+            ClipboardService.editEntry(root.entry, root.editorText, function (response) {
+                if (response.error) {
+                    ToastService.showError(I18n.tr("Failed to update clipboard"));
+                    return;
+                }
+                onComplete();
+            });
+            return;
+        }
+
+        DMSService.sendRequest("clipboard.copy", {
+            "text": root.editorText
+        }, function (response) {
+            if (response.error) {
+                ToastService.showError(I18n.tr("Failed to update clipboard"));
+                return;
+            }
+            onComplete();
         });
     }
 
@@ -196,8 +255,8 @@ Item {
 
     Column {
         anchors.fill: parent
-        anchors.margins: Theme.spacingM
-        spacing: Theme.spacingM
+        anchors.margins: PopoutMetrics.contentPadding
+        spacing: PopoutMetrics.contentGap
 
         Item {
             id: editorHeader
@@ -206,6 +265,7 @@ Item {
 
             DankActionButton {
                 iconName: "arrow_back"
+                Accessible.name: I18n.tr("Back")
                 iconSize: Theme.iconSize - 4
                 iconColor: Theme.surfaceText
                 anchors.left: parent.left
@@ -217,12 +277,13 @@ Item {
                 text: I18n.tr("Edit Clipboard")
                 font.pixelSize: Theme.fontSizeLarge
                 color: Theme.surfaceText
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
                 anchors.centerIn: parent
             }
 
             DankActionButton {
                 iconName: "close"
+                Accessible.name: I18n.tr("Close")
                 iconSize: Theme.iconSize - 4
                 iconColor: Theme.surfaceText
                 anchors.right: parent.right
@@ -234,10 +295,10 @@ Item {
         DankTextEdit {
             id: editField
             width: parent.width
-            height: Math.max(Theme.fontSizeMedium * 8, parent.height - editorHeader.height - editorActions.height - Theme.spacingM * 2)
+            height: Math.max(Theme.fontSizeMedium * 8, parent.height - editorHeader.height - editorActions.height - PopoutMetrics.contentGap * 2)
             leftIconName: "edit"
             placeholderText: I18n.tr("Edit clipboard text")
-            backgroundColor: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+            backgroundColor: Theme.floatingWindowFieldColor
             normalBorderColor: Theme.outlineMedium
             focusedBorderColor: Theme.primary
             keyForwardTargets: [editorKeyHandler]
@@ -265,90 +326,39 @@ Item {
             }
         }
 
-        Row {
+        RowLayout {
             id: editorActions
             width: parent.width
             spacing: Theme.spacingS
 
             Item {
-                id: buttonSpacer
-                width: Math.max(0, parent.width - cancelButton.width - saveButton.width - Theme.spacingS)
-                height: 1
+                Layout.fillWidth: true
             }
 
             DankButton {
                 id: cancelButton
                 text: I18n.tr("Cancel")
-                backgroundColor: Theme.surfaceContainerHigh
+                backgroundColor: Theme.chipSurface
                 textColor: Theme.surfaceText
                 onClicked: modal.mode = "history"
             }
 
-            Item {
+            RowLayout {
                 id: saveButton
+                spacing: Theme.spacingS
+                opacity: root.textLoaded ? 1 : 0.6
 
-                readonly property int buttonHeight: cancelButton.buttonHeight
-                readonly property int arrowWidth: Theme.iconSizeLarge
-
-                width: cancelButton.width
-                height: buttonHeight
-
-                Rectangle {
-                    anchors.fill: parent
-                    radius: Theme.cornerRadius
-                    color: Theme.primary
-                }
-
-                Item {
-                    id: saveMainArea
-                    anchors.left: parent.left
-                    anchors.right: saveArrowArea.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                }
-
-                StyledText {
+                DankButton {
                     text: I18n.tr("Save")
-                    font.pixelSize: Theme.fontSizeMedium
-                    font.weight: Font.Medium
-                    color: Theme.onPrimary
-                    anchors.centerIn: saveMainArea
-                }
-
-                Item {
-                    id: saveArrowArea
-                    width: saveButton.arrowWidth
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                }
-
-                Rectangle {
-                    width: 1
-                    height: parent.height - cancelButton.horizontalPadding
-                    color: Theme.withAlpha(Theme.onPrimary, 0.2)
-                    anchors.right: saveArrowArea.left
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                DankIcon {
-                    name: saveMenu.visible ? "expand_less" : "expand_more"
-                    size: Theme.iconSizeSmall
-                    color: Theme.onPrimary
-                    anchors.centerIn: saveArrowArea
-                }
-
-                StateLayer {
-                    z: 1
-                    anchors.fill: saveMainArea
-                    stateColor: Theme.onPrimary
+                    backgroundColor: Theme.primary
+                    textColor: Theme.onPrimary
                     onClicked: root.saveEntry("history")
                 }
 
-                StateLayer {
-                    z: 1
-                    anchors.fill: saveArrowArea
-                    stateColor: Theme.onPrimary
+                DankIconButton {
+                    variant: "filled"
+                    iconName: saveMenu.visible ? "expand_less" : "expand_more"
+                    tooltipText: I18n.tr("Save")
                     onClicked: root.toggleSaveMenu()
                 }
             }
@@ -364,10 +374,10 @@ Item {
             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
             background: StyledRect {
-                radius: Theme.cornerRadius
-                color: Theme.surfaceContainer
+                radius: Theme.windowRadius
+                color: Theme.floatingWindowNestedSurface
                 border.color: Theme.outlineMedium
-                border.width: 1
+                border.width: Theme.layerOutlineWidth
             }
 
             contentItem: Column {

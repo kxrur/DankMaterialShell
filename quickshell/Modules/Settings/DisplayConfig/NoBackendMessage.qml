@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Common
 import qs.Widgets
+import qs.Modules.Settings.Widgets
 
 StyledRect {
     id: root
@@ -11,7 +12,7 @@ StyledRect {
     width: parent.width
     height: messageContent.implicitHeight + Theme.spacingL * 2
     radius: Theme.cornerRadius
-    color: Theme.floatingWindowNestedSurface
+    color: SettingsMetrics.rowColor
     border.color: Theme.outlineMedium
     border.width: Theme.layerOutlineWidth
 
@@ -38,9 +39,9 @@ StyledRect {
                 anchors.verticalCenter: parent.verticalCenter
 
                 StyledText {
-                    text: I18n.tr("Monitor Configuration")
+                    text: I18n.tr("Arrangement")
                     font.pixelSize: Theme.fontSizeLarge
-                    font.weight: Font.Medium
+                    font.weight: Theme.fontWeightMedium
                     color: Theme.surfaceText
                     width: parent.width
                     horizontalAlignment: Text.AlignLeft

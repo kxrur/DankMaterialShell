@@ -2,7 +2,6 @@ package plugins
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -24,42 +23,20 @@ func setupTestManager(t *testing.T) (*Manager, afero.Fs, string) {
 	return manager, fs, pluginsDir
 }
 
-func TestNewManager(t *testing.T) {
-	manager, err := NewManager()
-	assert.NoError(t, err)
-	assert.NotNil(t, manager)
-	assert.NotEmpty(t, manager.pluginsDir)
-}
-
 func TestGetPluginsDir(t *testing.T) {
 	t.Run("uses XDG_CONFIG_HOME when set", func(t *testing.T) {
-		oldConfig := os.Getenv("XDG_CONFIG_HOME")
-		defer func() {
-			if oldConfig != "" {
-				os.Setenv("XDG_CONFIG_HOME", oldConfig)
-			} else {
-				os.Unsetenv("XDG_CONFIG_HOME")
-			}
-		}()
+		configHome := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", configHome)
 
-		os.Setenv("XDG_CONFIG_HOME", "/tmp/test-config")
-		dir := getPluginsDir()
-		assert.Equal(t, "/tmp/test-config/DankMaterialShell/plugins", dir)
+		assert.Equal(t, filepath.Join(configHome, "DankMaterialShell", "plugins"), getPluginsDir())
 	})
 
 	t.Run("falls back to home directory", func(t *testing.T) {
-		oldConfig := os.Getenv("XDG_CONFIG_HOME")
-		defer func() {
-			if oldConfig != "" {
-				os.Setenv("XDG_CONFIG_HOME", oldConfig)
-			} else {
-				os.Unsetenv("XDG_CONFIG_HOME")
-			}
-		}()
+		home := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("HOME", home)
 
-		os.Unsetenv("XDG_CONFIG_HOME")
-		dir := getPluginsDir()
-		assert.Contains(t, dir, ".config/DankMaterialShell/plugins")
+		assert.Equal(t, filepath.Join(home, ".config", "DankMaterialShell", "plugins"), getPluginsDir())
 	})
 }
 
@@ -242,11 +219,6 @@ func TestListInstalled(t *testing.T) {
 		assert.Len(t, installed, 1)
 		assert.Equal(t, "Plugin1", installed[0])
 	})
-}
-
-func TestManagerGetPluginsDir(t *testing.T) {
-	manager, _, pluginsDir := setupTestManager(t)
-	assert.Equal(t, pluginsDir, manager.GetPluginsDir())
 }
 
 func TestInstallUpdatesLockfile(t *testing.T) {

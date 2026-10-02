@@ -3,8 +3,9 @@ package mime
 import (
 	"fmt"
 
-	"github.com/AvengeMedia/DankMaterialShell/core/internal/desktop"
 	"github.com/AvengeMedia/DankMaterialShell/core/internal/server/models"
+	"github.com/AvengeMedia/dankgo/desktop"
+	"github.com/AvengeMedia/dankgo/ipc"
 	"github.com/AvengeMedia/dankgo/ipc/params"
 )
 
@@ -33,7 +34,7 @@ type queryResult struct {
 	Defaults map[string]string `json:"defaults"`
 }
 
-func HandleRequest(conn *models.Conn, req models.Request) {
+func HandleRequest(conn *ipc.ConnWriter, req ipc.Request) {
 	switch req.Method {
 	case "mime.getDefault":
 		handleGetDefault(conn, req)
@@ -55,8 +56,8 @@ func HandleRequest(conn *models.Conn, req models.Request) {
 	}
 }
 
-func handleGetDefault(conn *models.Conn, req models.Request) {
-	mimeType, err := mimeParam(req.Params, "mimeType")
+func handleGetDefault(conn *ipc.ConnWriter, req ipc.Request) {
+	mimeType, err := requestedMime(req.Params)
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
 		return
@@ -67,7 +68,7 @@ func handleGetDefault(conn *models.Conn, req models.Request) {
 	})
 }
 
-func handleSetDefault(conn *models.Conn, req models.Request) {
+func handleSetDefault(conn *ipc.ConnWriter, req ipc.Request) {
 	mimeType, err := mimeParam(req.Params, "mimeType")
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
@@ -85,7 +86,7 @@ func handleSetDefault(conn *models.Conn, req models.Request) {
 	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
 }
 
-func handleSetDefaults(conn *models.Conn, req models.Request) {
+func handleSetDefaults(conn *ipc.ConnWriter, req ipc.Request) {
 	desktopID, err := params.StringNonEmpty(req.Params, "desktopId")
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
@@ -103,7 +104,7 @@ func handleSetDefaults(conn *models.Conn, req models.Request) {
 	models.Respond(conn, req.ID, models.SuccessResult{Success: true})
 }
 
-func handleAppsForMime(conn *models.Conn, req models.Request) {
+func handleAppsForMime(conn *ipc.ConnWriter, req ipc.Request) {
 	mimeType, err := mimeParam(req.Params, "mimeType")
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
@@ -119,7 +120,7 @@ func handleAppsForMime(conn *models.Conn, req models.Request) {
 	})
 }
 
-func handleHandlersForMime(conn *models.Conn, req models.Request) {
+func handleHandlersForMime(conn *ipc.ConnWriter, req ipc.Request) {
 	mimeType, err := mimeParam(req.Params, "mimeType")
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
@@ -140,7 +141,7 @@ func handleHandlersForMime(conn *models.Conn, req models.Request) {
 	})
 }
 
-func handleQueryDefaults(conn *models.Conn, req models.Request) {
+func handleQueryDefaults(conn *ipc.ConnWriter, req ipc.Request) {
 	mimeTypes, err := mimeListParam(req, "mimeTypes")
 	if err != nil {
 		models.RespondError(conn, req.ID, err.Error())
@@ -149,6 +150,21 @@ func handleQueryDefaults(conn *models.Conn, req models.Request) {
 	models.Respond(conn, req.ID, queryResult{
 		Defaults: desktop.QueryDefaults(mimeTypes),
 	})
+}
+
+func requestedMime(p map[string]any) (string, error) {
+	if _, ok := p["mimeType"]; ok {
+		return mimeParam(p, "mimeType")
+	}
+	filePath, err := params.StringNonEmpty(p, "path")
+	if err != nil {
+		return "", fmt.Errorf("missing 'mimeType' or 'path' parameter")
+	}
+	mimeType := MimeTypeForPath(filePath)
+	if mimeType == "" {
+		return "", fmt.Errorf("no mime type matches %q", filePath)
+	}
+	return mimeType, nil
 }
 
 func mimeParam(p map[string]any, key string) (string, error) {
@@ -163,7 +179,7 @@ func mimeParam(p map[string]any, key string) (string, error) {
 	return canonical, nil
 }
 
-func mimeListParam(req models.Request, key string) ([]string, error) {
+func mimeListParam(req ipc.Request, key string) ([]string, error) {
 	raw, ok := models.Get[[]any](req, key)
 	if !ok {
 		return nil, fmt.Errorf("missing or invalid '%s' parameter", key)

@@ -3,14 +3,15 @@ import QtQuick.Effects
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modules.Settings.Widgets
 
 Column {
     id: root
 
     readonly property real logoSize: Math.round(Theme.iconSize * 2.8)
     readonly property real badgeHeight: Math.round(Theme.fontSizeSmall * 1.7)
-    readonly property string releaseNotesUrl: "https://danklinux.com/blog/v1-6-release"
-    readonly property string screenshotDocsUrl: "https://danklinux.com/docs/dankmaterialshell/cli-screenshot"
+    readonly property string releaseNotesUrl: Site.web + "/blog/v1-6-release"
+    readonly property string screenshotDocsUrl: Site.docs + "/dankmaterialshell/cli-screenshot"
 
     topPadding: Theme.spacingL
     spacing: Theme.spacingL
@@ -52,7 +53,6 @@ Column {
                     StyledText {
                         text: "DMS " + ChangelogService.currentVersion
                         font.pixelSize: Theme.fontSizeXLarge + 2
-                        font.weight: Font.Bold
                         color: Theme.surfaceText
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -60,7 +60,7 @@ Column {
                     Rectangle {
                         width: codenameText.implicitWidth + Theme.spacingM * 2
                         height: root.badgeHeight
-                        radius: root.badgeHeight / 2
+                        radius: Theme.fullRadius(width, height)
                         color: Theme.primaryContainer
                         anchors.verticalCenter: parent.verticalCenter
 
@@ -69,8 +69,8 @@ Column {
                             anchors.centerIn: parent
                             text: "Marble Tabby"
                             font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Medium
-                            color: Theme.primary
+                            font.weight: Theme.fontWeightMedium
+                            color: Theme.accentOnPrimaryContainer
                         }
                     }
                 }
@@ -98,7 +98,7 @@ Column {
         StyledText {
             text: "What's New"
             font.pixelSize: Theme.fontSizeMedium
-            font.weight: Font.Medium
+            font.weight: Theme.fontWeightMedium
             color: Theme.surfaceText
         }
 
@@ -114,8 +114,8 @@ Column {
                 title: "Dank Island"
                 description: "A bar that reacts to you"
                 onClicked: {
-                    SettingsSearchService.navigateToSection("dankIslandInstance");
-                    PopoutService.openSettingsWithTab("dank_island");
+                    SettingsSearchService.navigateToSection("barLayout");
+                    PopoutService.openSettingsWithTab("dankbar");
                 }
             }
 
@@ -183,7 +183,7 @@ Column {
                 description: "Pinned apps, running apps"
                 onClicked: {
                     SettingsSearchService.navigateToSection("dockSeparatePinnedAndRunningApps");
-                    PopoutService.openSettingsWithTab("dock");
+                    PopoutService.openSettingsWithTab("dock_general");
                 }
             }
 
@@ -232,7 +232,7 @@ Column {
             StyledText {
                 text: "Upgrade Notes"
                 font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
+                font.weight: Theme.fontWeightMedium
                 color: Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -269,6 +269,41 @@ Column {
                     text: "settings.json only stores what differs from the defaults, and machine-specific state moved to session.json"
                 }
             }
+        }
+    }
+
+    SettingsDivider {
+        visible: ChangelogService.release !== null
+    }
+
+    Column {
+        width: parent.width
+        visible: ChangelogService.release !== null
+        spacing: Theme.spacingS
+
+        Row {
+            spacing: Theme.spacingS
+
+            DankIcon {
+                name: "auto_awesome"
+                size: Theme.iconSizeSmall
+                color: Theme.primary
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            StyledText {
+                text: I18n.tr("What changed")
+                font.pixelSize: Theme.fontSizeMedium
+                font.weight: Theme.fontWeightMedium
+                color: Theme.surfaceText
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+
+        ReleaseNotesCard {
+            width: parent.width
+            release: ChangelogService.release
+            showTitle: false
         }
     }
 }

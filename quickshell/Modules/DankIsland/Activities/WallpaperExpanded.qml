@@ -11,10 +11,11 @@ DashTabFace {
     activityId: "wallpaper"
     tabComponent: Component {
         WallpaperTab {
-            active: true
+            active: root.live
             pagerCachePages: 0
             targetScreen: root.effectiveScreen
             parentPopout: hostContract
+            transientSurfaceTracker: root.controller.transientSurfaces
         }
     }
 

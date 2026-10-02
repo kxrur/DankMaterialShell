@@ -13,8 +13,11 @@ Column {
     property int value: defaultValue
     property int minimum: 0
     property int maximum: 100
-    property string leftIcon: ""
-    property string rightIcon: ""
+    property string startIcon: ""
+    property string endIcon: ""
+    property alias leftIcon: root.startIcon // ! TODO deprecate me after 1.7 release
+    property alias rightIcon: root.endIcon // ! TODO deprecate me after 1.7 release
+    property bool iconsClickable: false
     property string unit: ""
 
     width: parent.width
@@ -41,7 +44,7 @@ Column {
     StyledText {
         text: root.label
         font.pixelSize: Theme.fontSizeMedium
-        font.weight: Font.Medium
+        font.weight: Theme.fontWeightMedium
         color: Theme.surfaceText
     }
 
@@ -55,15 +58,16 @@ Column {
     }
 
     DankSlider {
+        upDownKeysStep: false
         width: parent.width
         value: root.value
         minimum: root.minimum
         maximum: root.maximum
-        leftIcon: root.leftIcon
-        rightIcon: root.rightIcon
+        startIcon: root.startIcon
+        endIcon: root.endIcon
+        iconsClickable: root.iconsClickable
         unit: root.unit
         wheelEnabled: false
-        thumbOutlineColor: Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency)
         onSliderValueChanged: newValue => {
             root.value = newValue;
         }

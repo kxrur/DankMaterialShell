@@ -18,7 +18,7 @@ Variants {
         required property var modelData
 
         readonly property string emergeSide: SettingsData.frameLauncherEmergeSide || "bottom"
-        readonly property bool eligible: SettingsData.frameEnabled && SettingsData.frameLauncherEdgeHover && Theme.isConnectedEffect && SettingsData.isScreenInPreferences(zoneLoader.modelData, SettingsData.frameScreenPreferences) && CompositorService.usesConnectedFrameChromeForScreen(zoneLoader.modelData) && !SettingsData.barOccupiesSide(zoneLoader.modelData, zoneLoader.emergeSide) && !SettingsData.dockOccupiesSide(zoneLoader.emergeSide)
+        readonly property bool eligible: SettingsData.frameEnabled && SettingsData.frameLauncherEdgeHover && Theme.isConnectedEffect && SettingsData.isScreenInPreferences(zoneLoader.modelData, SettingsData.frameScreenPreferences) && CompositorService.usesConnectedFrameChromeForScreen(zoneLoader.modelData) && !SettingsData.barOccupiesSide(zoneLoader.modelData, zoneLoader.emergeSide) && !SettingsData.dockOccupiesSide(zoneLoader.modelData, zoneLoader.emergeSide)
 
         active: eligible
         asynchronous: false
@@ -28,7 +28,7 @@ Variants {
 
             readonly property bool vertical: zoneLoader.emergeSide === "left" || zoneLoader.emergeSide === "right"
             readonly property real triggerThickness: Math.max(6, SettingsData.frameThickness)
-            readonly property bool launcherOpen: PopoutService.dankLauncherV2Modal?.spotlightOpen ?? false
+            readonly property bool launcherOpen: (PopoutService.dankLauncherV2Modal?.spotlightOpen ?? false) || (PopoutService.dankIslandRouter?.launcherOpen ?? false)
             property bool _openedForCurrentHover: false
 
             // Hot zone dimensions centered on the emerge edge to cover the launcher footprint.
@@ -43,7 +43,7 @@ Variants {
                 if (launcherOpen || _openedForCurrentHover)
                     return;
                 _openedForCurrentHover = true;
-                PopoutService.openDankLauncherV2(CompositorService.framePeerSurfacesUseOverlayForScreen(zoneLoader.modelData), true);
+                PopoutService.openDankLauncherV2(false, true);
             }
 
             screen: zoneLoader.modelData

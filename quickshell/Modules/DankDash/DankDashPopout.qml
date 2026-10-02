@@ -1,458 +1,770 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
+import qs.Modules.ControlCenter.Widgets
+import qs.Modules.DankDash.Overview
+import "../../DankCommon/Common/FocusNavigation.js" as FocusNavigation
 
 DankPopout {
     id: root
 
     layerNamespace: "dms:dash"
+    fullHeightSurface: true
+    contentHandlesKeys: true
+    closesWithSource: false
+    resizeCurve: Theme.expressiveCurves.standard
+    resizeDuration: Theme.expressiveDurations.expressiveFastSpatial
+    resizeMotion: true
+    resizing: contentLoader.item?.panelResizing ?? false
+    surfacePadding: PopoutMetrics.editOverflow * 2
+    inputMargin: editGutter * 2
+    hoverDismissSuspended: editMode
+    onOpened: contentFocusTimer.restart()
+
+    Timer {
+        id: contentFocusTimer
+        interval: 0
+        onTriggered: {
+            if (root.shouldBeVisible)
+                root.contentLoader.item?.focusInitial();
+        }
+    }
 
     property bool dashVisible: false
     property var triggerScreen: null
-    property string currentTabId: "overview"
+    property string currentTabId: DashRegistry.defaultTabId
+    property string detailTabId: ""
+    property bool editMode: false
+    property string overviewFocusId: CacheData.dashFocusCardId || "calendar"
 
-    readonly property var __tabPresentation: ({
-            "overview": {
-                "icon": "dashboard",
-                "text": I18n.tr("Overview")
-            },
-            "media": {
-                "icon": "music_note",
-                "text": I18n.tr("Media")
-            },
-            "wallpaper": {
-                "icon": "wallpaper",
-                "text": I18n.tr("Wallpapers")
-            },
-            "weather": {
-                "icon": "wb_sunny",
-                "text": I18n.tr("Weather")
-            },
-            "settings": {
-                "icon": "settings",
-                "text": I18n.tr("Settings"),
-                "isAction": true
-            }
-        })
-    readonly property var orderedTabIds: SettingsData.visibleDashTabIds()
-    // -1 when the current view's tab is hidden: the view still shows, no tab is highlighted.
+    onEditModeChanged: {
+        if (!editMode)
+            contentLoader.item?.panelResizer.cancel();
+        if (!shouldBeVisible)
+            return;
+        Qt.callLater(() => contentLoader.item?.focusInitial());
+    }
+
+    readonly property string activeTabId: detailTabId !== "" ? detailTabId : currentTabId
+    readonly property var detailEntry: detailTabId !== "" ? DashRegistry.entry(detailTabId) : null
+    readonly property var orderedTabIds: DashRegistry.visibleTabIds
     readonly property int currentTabIndex: orderedTabIds.indexOf(currentTabId)
+    readonly property bool showTabs: orderedTabIds.length > 1 && currentTabIndex >= 0 && detailTabId === ""
+    readonly property bool canReturn: detailTabId !== "" && currentTabIndex >= 0
+    readonly property bool showHeader: detailTabId === "" || editMode
+    readonly property int navigationEdge: {
+        switch (SettingsData.dashTabPosition) {
+        case "left":
+            return SettingsData.Left;
+        case "right":
+            return SettingsData.Right;
+        case "bottom":
+            return SettingsData.Bottom;
+        case "center":
+            return SettingsData.Top;
+        }
+        switch (effectiveBarPosition % 4) {
+        case SettingsData.Left:
+            return SettingsData.Right;
+        case SettingsData.Right:
+            return SettingsData.Left;
+        default:
+            return effectiveBarPosition % 4;
+        }
+    }
+    readonly property bool verticalNavigation: showTabs && (navigationEdge === SettingsData.Left || navigationEdge === SettingsData.Right)
+    readonly property real navigationWidth: verticalNavigation ? Theme.navigationRailWidth + DashMetrics.contentGap : 0
 
-    function __isActionTab(id) {
-        return root.__tabPresentation[id]?.isAction === true;
+    readonly property int columnCap: DashMetrics.columnCapFor(screen ? screen.width - navigationWidth : undefined, SettingsData.showWeekNumber)
+    readonly property real editGutter: editMode ? PopoutMetrics.editOverflow : 0
+
+    popupWidth: panelWidthFor(DashMetrics.panelColumnsFor(activeTabId))
+    minimumSurfaceWidth: panelWidthFor(editMode ? columnCap : DashRegistry.widestPanelColumns)
+    popupHeight: contentLoader.item?.implicitHeight ?? (DashMetrics.tabDefaultHeight + Theme.navigationHeight + DashMetrics.contentGap + DashMetrics.contentPadding * 2)
+    triggerWidth: DashMetrics.triggerWidth
+    screen: triggerScreen
+
+    property bool __focusArmed: false
+
+    function panelWidthFor(columns) {
+        return DashMetrics.widthFor(SettingsData.showWeekNumber, screen ? screen.width - navigationWidth : undefined, columns) + navigationWidth;
     }
 
-    // Show a view regardless of tab visibility; bar widgets and IPC land here.
-    function requestTab(id) {
-        const valid = __tabPresentation[id] !== undefined && !__isActionTab(id) && (id !== "weather" || SettingsData.weatherEnabled);
-        currentTabId = valid ? id : "overview";
+    function requestTab(tab) {
+        const id = DashRegistry.resolveId(tab);
+        if (DashRegistry.isSelectable(id)) {
+            detailTabId = "";
+            currentTabId = id;
+            return;
+        }
+        if (DashRegistry.hasTab(id)) {
+            detailTabId = id;
+            return;
+        }
+        detailTabId = "";
+        currentTabId = DashRegistry.defaultTabId;
     }
 
-    function __cycleTab(dir) {
-        const ids = orderedTabIds.filter(id => !__isActionTab(id));
+    function closeDetail() {
+        if (!canReturn) {
+            dashVisible = false;
+            return;
+        }
+        detailTabId = "";
+    }
+
+    function cycleTab(dir) {
+        const ids = orderedTabIds;
         if (ids.length === 0)
             return;
         const pos = ids.indexOf(currentTabId);
         const next = pos < 0 ? (dir > 0 ? 0 : ids.length - 1) : (pos + dir + ids.length) % ids.length;
+        detailTabId = "";
         currentTabId = ids[next];
     }
 
-    Connections {
-        target: SettingsData
-        function onWeatherEnabledChanged() {
-            if (!SettingsData.weatherEnabled && root.currentTabId === "weather")
-                root.currentTabId = "overview";
-        }
+    function focusContent(backwards) {
+        contentLoader.item?.focusNavigation(backwards);
     }
 
-    popupWidth: SettingsData.showWeekNumber ? 736 : 700
-    popupHeight: contentLoader.item ? contentLoader.item.implicitHeight : 500
-    triggerWidth: 80
-    screen: triggerScreen
-
-    property bool __focusArmed: false
-    property bool __contentReady: false
-
-    property var __mediaTabRef: null
-
-    property int __dropdownType: 0
-    property point __dropdownAnchor: Qt.point(0, 0)
-    property bool __dropdownRightEdge: false
-    property var __dropdownPlayer: MprisController.activePlayer
-    property var __dropdownPlayers: MprisController.availablePlayers
-
-    function __showVolumeDropdown(pos, rightEdge, player, players) {
-        __dropdownAnchor = pos;
-        __dropdownRightEdge = rightEdge;
-        __dropdownPlayer = Qt.binding(() => MprisController.activePlayer);
-        __dropdownPlayers = Qt.binding(() => MprisController.availablePlayers);
-        __dropdownType = 1;
+    onActiveTabIdChanged: {
+        editMode = false;
+        contentLoader.item?.dismissOptions();
+        contentLoader.item?.resetScroll();
+        if (shouldBeVisible && !contentLoader.item?.navigationFocused)
+            contentLoader.item?.focusInitial();
     }
 
-    function __showAudioDevicesDropdown(pos, rightEdge) {
-        __dropdownAnchor = pos;
-        __dropdownRightEdge = rightEdge;
-        __dropdownType = 2;
+    readonly property string registryVisibleTabIds: DashRegistry.visibleTabIds.join("\n")
+    readonly property string registryTabIds: DashRegistry.tabIds.join("\n")
+
+    onRegistryVisibleTabIdsChanged: {
+        if (!DashRegistry.isSelectable(currentTabId))
+            currentTabId = DashRegistry.defaultTabId;
     }
 
-    function __showPlayersDropdown(pos, rightEdge, player, players) {
-        __dropdownAnchor = pos;
-        __dropdownRightEdge = rightEdge;
-        __dropdownPlayer = Qt.binding(() => MprisController.activePlayer);
-        __dropdownPlayers = Qt.binding(() => MprisController.availablePlayers);
-        __dropdownType = 3;
-    }
-
-    function __hideDropdowns() {
-        __volumeCloseTimer.stop();
-        __dropdownType = 0;
-        if (__mediaTabRef && typeof __mediaTabRef.resetDropdownStates === "function")
-            __mediaTabRef.resetDropdownStates();
-    }
-
-    function __startCloseTimer() {
-        __volumeCloseTimer.restart();
-    }
-
-    function __stopCloseTimer() {
-        __volumeCloseTimer.stop();
-    }
-
-    Timer {
-        id: __volumeCloseTimer
-        interval: 400
-        onTriggered: {
-            if (__dropdownType !== 0) {
-                __hideDropdowns();
-            }
-        }
-    }
-
-    overlayContent: shouldBeVisible ? mediaDropdownOverlayComponent : null
-
-    Component {
-        id: mediaDropdownOverlayComponent
-
-        MediaDropdownOverlay {
-            dropdownType: root.__dropdownType
-            anchorPos: root.__dropdownAnchor
-            isRightEdge: root.__dropdownRightEdge
-            activePlayer: root.__dropdownPlayer
-            allPlayers: root.__dropdownPlayers
-            targetWindow: root.backgroundWindow
-            onCloseRequested: root.__hideDropdowns()
-            onPanelEntered: root.__stopCloseTimer()
-            onPanelExited: root.__startCloseTimer()
-        }
+    onRegistryTabIdsChanged: {
+        if (detailTabId !== "" && !DashRegistry.hasTab(detailTabId))
+            detailTabId = "";
     }
 
     function __tryFocusOnce() {
         if (!__focusArmed)
             return;
-        const win = root.window;
+        const win = root.contentWindow;
         if (!win || !win.visible)
             return;
-        if (!contentLoader.item)
+        const content = contentLoader.item;
+        if (!content)
             return;
         if (win.requestActivate)
             win.requestActivate();
-        contentLoader.item.forceActiveFocus(Qt.TabFocusReason);
-
-        if (contentLoader.item.activeFocus)
+        content.focusInitial();
+        if (content.activeFocus)
             __focusArmed = false;
     }
 
     onDashVisibleChanged: {
         if (dashVisible) {
             __focusArmed = true;
-            __contentReady = !!contentLoader.item;
-            open();
-            __tryFocusOnce();
-        } else {
-            __focusArmed = false;
-            __contentReady = false;
-            __hideDropdowns();
-            close();
+            presentWhenReady();
+            return;
+        }
+        __focusArmed = false;
+        contentLoader.item?.dismissOptions();
+        if (openDeadline.running) {
+            openDeadline.stop();
+            clearPrimedContent();
+        }
+        close();
+        if (CacheData.dashFocusCardId !== overviewFocusId)
+            CacheData.set("dashFocusCardId", overviewFocusId);
+    }
+
+    onPopoutClosed: {
+        editMode = false;
+        detailTabId = "";
+    }
+
+    function presentWhenReady() {
+        primeContent();
+        openDeadline.restart();
+        Qt.callLater(presentIfReady);
+    }
+
+    function presentIfReady() {
+        if (!openDeadline.running || !contentLoader.item?.ready)
+            return;
+        presentNow();
+    }
+
+    function presentNow() {
+        openDeadline.stop();
+        if (!dashVisible || shouldBeVisible)
+            return;
+        open();
+        __tryFocusOnce();
+    }
+
+    Timer {
+        id: openDeadline
+        interval: DashMetrics.openReadyDeadline
+        onTriggered: root.presentNow()
+    }
+
+    Connections {
+        target: root.contentLoader.item ?? null
+        ignoreUnknownSignals: true
+
+        function onReadyChanged() {
+            Qt.callLater(root.presentIfReady);
         }
     }
 
     Connections {
         target: contentLoader
+
         function onLoaded() {
-            __contentReady = true;
-            if (__focusArmed)
-                __tryFocusOnce();
+            if (root.__focusArmed)
+                root.__tryFocusOnce();
         }
     }
 
     Connections {
-        target: root.window ? root.window : null
-        enabled: !!root.window
+        target: root.contentWindow ? root.contentWindow : null
+        enabled: !!root.contentWindow
+
         function onVisibleChanged() {
-            if (__focusArmed)
-                __tryFocusOnce();
+            if (root.__focusArmed)
+                root.__tryFocusOnce();
         }
     }
 
-    onBackgroundClicked: {
-        dashVisible = false;
-    }
+    onBackgroundClicked: dashVisible = false
 
     content: Component {
-        Rectangle {
+        FocusScope {
             id: mainContainer
 
             LayoutMirroring.enabled: I18n.isRtl
             LayoutMirroring.childrenInherit: true
 
-            MouseArea {
-                anchors.fill: parent
-                z: -1
-                enabled: root.__dropdownType !== 0
-                onClicked: root.__hideDropdowns()
-            }
-
-            implicitWidth: Math.max(700, pages.implicitWidth + (Theme.spacingM * 2))
-            implicitHeight: contentColumn.height + Theme.spacingM * 2
-            color: "transparent"
+            implicitWidth: root.popupWidth
+            implicitHeight: horizontalChromeHeight + pages.implicitHeight + DashMetrics.contentPadding * 2
+            readonly property real horizontalChromeHeight: root.verticalNavigation || !root.showHeader ? 0 : (root.showTabs ? tabBar.implicitHeight : Theme.minimumTouchTargetSize) + DashMetrics.contentGap
+            readonly property bool ready: pages.ready
+            readonly property bool navigationFocused: tabBar.activeFocus
             focus: true
 
-            Component.onCompleted: {
-                if (root.shouldBeVisible) {
-                    mainContainer.forceActiveFocus();
+            readonly property bool panelResizing: panelResizer.resizing
+            readonly property bool cardResizing: pages.currentItem?.cardResizing ?? false
+            property int cardResizeColumns: 0
+            property int cardResizeRows: 0
+            readonly property bool panelShifted: cardResizing && (panelColumns !== cardResizeColumns || panelRows !== cardResizeRows)
+            onCardResizingChanged: {
+                if (!cardResizing)
+                    return;
+                cardResizeColumns = panelColumns;
+                cardResizeRows = panelRows;
+            }
+            readonly property int panelColumns: DashMetrics.panelColumnsFor(root.activeTabId)
+            readonly property int contentRows: DashMetrics.rowsForHeight(pages.currentHostImplicitHeight)
+            readonly property int panelRows: Math.max(DashMetrics.panelFloorRowsFor(root.activeTabId), contentRows)
+            readonly property bool panelAtDefault: panelColumns === DashMetrics.defaultGridColumns && panelRows === DashMetrics.defaultPanelRows(root.activeTabId, contentRows)
+            readonly property DankPanelResizer panelResizer: DankPanelResizer {
+                popout: root
+                stepWidth: DashMetrics.preferredColumnWidth + DashMetrics.gridGap
+                widthFor: columns => root.panelWidthFor(columns)
+                currentStep: () => mainContainer.panelColumns
+                currentRows: () => mainContainer.panelRows
+                minStep: Math.max(DashMetrics.minimumGridColumns, pages.currentItem?.usedColumns ?? 0)
+                maxStep: root.columnCap
+                rowUnit: DashMetrics.gridRowUnit + DashMetrics.gridGap
+                minRows: mainContainer.contentRows
+                maxRows: Math.min(pages.rowBudget, DashMetrics.maximumGridRows)
+                onPreview: (columns, rows) => DashMetrics.panelPreview = {
+                        "id": root.activeTabId,
+                        "columns": columns,
+                        "rows": rows
+                    }
+                onCommitted: (columns, rows, columnsChanged, rowsChanged) => {
+                    const values = {};
+                    if (columnsChanged)
+                        values.panelColumns = columns;
+                    if (rowsChanged)
+                        values.panelRows = DashMetrics.panelRowsToStore(root.activeTabId, rows, mainContainer.contentRows);
+                    DashRegistry.setOptions(root.activeTabId, values);
+                    DashMetrics.panelPreview = null;
                 }
+                onCanceled: DashMetrics.panelPreview = null
             }
 
-            Connections {
-                target: root
-                function onShouldBeVisibleChanged() {
-                    if (!root.shouldBeVisible)
-                        return;
-                    mainContainer.forceActiveFocus();
-                    tabBar.snapIndicator();
+            function headerFocusTargets() {
+                const targets = root.editMode ? pageActions.focusTargets : [tabBar, pageTitle.focusTarget];
+                return targets.filter(item => item.visible && item.enabled);
+            }
+
+            function focusNavigation(backwards) {
+                const targets = headerFocusTargets();
+                const target = backwards ? targets[targets.length - 1] : targets[0];
+                target?.forceActiveFocus(backwards ? Qt.BacktabFocusReason : Qt.TabFocusReason);
+            }
+
+            function focusInitial() {
+                if (root.activeTabId === "") {
+                    emptySettings.forceActiveFocus(Qt.OtherFocusReason);
+                    return;
                 }
+                for (const target of [tabBar, pageTitle.focusTarget])
+                    target.focus = false;
+                pageActions.clearFocus();
+                if (pages.currentHost)
+                    pages.currentHost.focus = false;
+                mainContainer.forceActiveFocus(Qt.OtherFocusReason);
+                if (!root.editMode)
+                    pages.currentItem?.restoreFocus?.();
+            }
+
+            function contentEntryFor(key) {
+                switch (key) {
+                case Qt.Key_Down:
+                case Qt.Key_Right:
+                    return "forwards";
+                case Qt.Key_Up:
+                case Qt.Key_Left:
+                    return "backwards";
+                }
+                return "";
+            }
+
+            function enterContent(backwards) {
+                const target = backwards ? (pages.currentItem?.previousFocusTarget ?? pages.focusTarget) : pages.focusTarget;
+                FocusNavigation.focusItem(target, backwards);
+            }
+
+            function cycleRegion(backwards) {
+                if (pages.currentHost?.activeFocus) {
+                    if (pages.currentItem?.cycleFocus?.(backwards) === true)
+                        return;
+                    focusNavigation(backwards);
+                    return;
+                }
+                const targets = headerFocusTargets();
+                const inHeader = targets.some(FocusNavigation.containsFocus);
+                if (inHeader && FocusNavigation.moveFocus(targets, backwards))
+                    return;
+                if (inHeader && pages.currentItem?.cycleFocus?.(backwards) === true)
+                    return;
+                enterContent(backwards);
+            }
+
+            function resetScroll() {
+                pages.contentY = 0;
+            }
+
+            function revealFocusedItem() {
+                const item = mainContainer.windowFocusItem;
+                if (!item)
+                    return;
+                let ancestor = item;
+                while (ancestor && ancestor !== pages.contentItem)
+                    ancestor = ancestor.parent;
+                if (!ancestor)
+                    return;
+                const point = item.mapToItem(pages.contentItem, 0, 0);
+                let target = pages.contentY;
+                if (point.y < target)
+                    target = point.y;
+                else if (point.y + item.height > target + pages.height)
+                    target = Math.min(point.y, point.y + item.height - pages.height);
+                pages.contentY = Math.max(0, Math.min(target, pages.contentHeight - pages.height));
+            }
+
+            readonly property Item windowFocusItem: Window.activeFocusItem
+            onWindowFocusItemChanged: revealFocusedItem()
+
+            function dismissOptions() {
+                tabOptions.dismiss();
+                pageActions.closeMenu();
+            }
+
+            Component.onCompleted: {
+                if (root.shouldBeVisible)
+                    focusInitial();
+            }
+
+            readonly property bool rootShouldBeVisible: root.shouldBeVisible
+
+            onRootShouldBeVisibleChanged: {
+                if (!rootShouldBeVisible)
+                    return;
+                focusInitial();
             }
 
             Keys.onPressed: function (event) {
-                if (event.key === Qt.Key_Escape) {
-                    if (root.currentTabId === "wallpaper" && wallpaperLoader.item?.handleKeyEvent && wallpaperLoader.item.handleKeyEvent(event)) {
-                        event.accepted = true;
+                if (pageActions.menuOpen)
+                    return;
+                if (tabOptions.shown) {
+                    if (event.key !== Qt.Key_Escape)
                         return;
-                    }
-                    root.dashVisible = false;
+                    tabOptions.dismiss();
                     event.accepted = true;
                     return;
                 }
 
-                if (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ShiftModifier)) {
-                    root.__cycleTab(1);
+                const current = pages.currentItem;
+                if (current && typeof current.handleKeyEvent === "function" && current.handleKeyEvent(event) === true) {
                     event.accepted = true;
                     return;
                 }
 
-                if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
-                    root.__cycleTab(-1);
+                const entry = contentEntryFor(event.key);
+                if (entry !== "" && !pages.currentHost?.activeFocus) {
+                    enterContent(entry === "backwards");
                     event.accepted = true;
                     return;
                 }
 
-                if (root.currentTabId === "overview" && overviewLoader.item?.handleKeyEvent) {
-                    if (overviewLoader.item.handleKeyEvent(event)) {
+                if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                    if (root.editMode) {
+                        mainContainer.focusNavigation(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
                         event.accepted = true;
                         return;
                     }
+                    if (current?.blocksTabNavigation)
+                        return;
+                    root.cycleTab(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1);
+                    event.accepted = true;
+                    return;
                 }
-
-                if (root.currentTabId === "media" && mediaLoader.item?.handleKeyEvent) {
-                    if (mediaLoader.item.handleKeyEvent(event)) {
-                        event.accepted = true;
-                        return;
-                    }
+                if (event.key !== Qt.Key_Escape)
+                    return;
+                if (root.editMode) {
+                    root.editMode = false;
+                    event.accepted = true;
+                    return;
                 }
+                if (root.detailTabId !== "") {
+                    root.closeDetail();
+                    event.accepted = true;
+                    return;
+                }
+                root.dashVisible = false;
+                event.accepted = true;
+            }
 
-                if (root.currentTabId === "wallpaper" && wallpaperLoader.item?.handleKeyEvent) {
-                    if (wallpaperLoader.item.handleKeyEvent(event)) {
-                        event.accepted = true;
-                        return;
-                    }
+            Shortcut {
+                sequence: "Tab"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: {
+                    root.cycleTab(1);
+                    mainContainer.focusInitial();
                 }
             }
 
-            Column {
-                id: contentColumn
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: Theme.spacingM
-                spacing: Theme.spacingS
+            Shortcut {
+                sequence: "Shift+Tab"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: {
+                    root.cycleTab(-1);
+                    mainContainer.focusInitial();
+                }
+            }
 
-                DankTabBar {
-                    id: tabBar
+            Shortcut {
+                sequence: "Ctrl+Tab"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen
+                context: Qt.WindowShortcut
+                onActivated: {
+                    root.cycleTab(1);
+                    mainContainer.focusInitial();
+                }
+            }
 
-                    // Effective visibility is false while the popout window is unmapped, so gating
-                    // height on `visible` collapses the bar between opens and resizes the surface
-                    // mid-animation. Gate on data only. The bar also hides entirely when the
-                    // current view's tab isn't in the visible set (e.g. IPC-opened hidden tab).
-                    readonly property bool showTabs: (model?.length ?? 0) > 0 && root.currentTabIndex >= 0
-                    width: parent.width
-                    height: showTabs ? 48 : 0
-                    visible: showTabs
-                    currentIndex: root.currentTabIndex
-                    spacing: Theme.spacingS
-                    equalWidthTabs: true
-                    enableArrowNavigation: false
-                    focus: false
-                    activeFocusOnTab: false
-                    nextFocusTarget: {
-                        const item = pages.currentItem;
-                        if (!item)
-                            return null;
-                        if (item.focusTarget)
-                            return item.focusTarget;
-                        return item;
-                    }
+            Shortcut {
+                sequence: "Ctrl+Shift+Tab"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen
+                context: Qt.WindowShortcut
+                onActivated: {
+                    root.cycleTab(-1);
+                    mainContainer.focusInitial();
+                }
+            }
 
-                    model: root.orderedTabIds.map(id => root.__tabPresentation[id])
+            Shortcut {
+                sequences: ["F2", "Ctrl+E"]
+                enabled: root.shouldBeVisible && root.activeTabId !== "" && !root.editMode && !tabOptions.shown && !pageActions.menuOpen && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: root.editMode = true
+            }
 
-                    onTabClicked: function (index) {
-                        const id = root.orderedTabIds[index];
-                        if (id !== undefined)
-                            root.currentTabId = id;
-                    }
+            Shortcut {
+                sequence: "F6"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: mainContainer.cycleRegion(false)
+            }
 
-                    onActionTriggered: function (index) {
-                        if (root.orderedTabIds[index] === "settings") {
-                            dashVisible = false;
-                            PopoutService.focusOrToggleSettings();
+            Shortcut {
+                sequence: "Shift+F6"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: mainContainer.cycleRegion(true)
+            }
+
+            Shortcut {
+                sequence: "Alt+Tab"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: pages.currentItem?.cycleCardFocus?.(false)
+            }
+
+            Shortcut {
+                sequence: "Alt+Shift+Tab"
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: pages.currentItem?.cycleCardFocus?.(true)
+            }
+
+            Shortcut {
+                sequences: ["Alt+Left", "Alt+H"]
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: pages.currentItem?.moveCardFocus?.("left")
+            }
+
+            Shortcut {
+                sequences: ["Alt+Right", "Alt+L"]
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: pages.currentItem?.moveCardFocus?.("right")
+            }
+
+            Shortcut {
+                sequences: ["Alt+Up", "Alt+K"]
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: pages.currentItem?.moveCardFocus?.("up")
+            }
+
+            Shortcut {
+                sequences: ["Alt+Down", "Alt+J"]
+                enabled: root.shouldBeVisible && !tabOptions.shown && !pageActions.menuOpen && !root.editMode && !pages.currentItem?.blocksTabNavigation
+                context: Qt.WindowShortcut
+                onActivated: pages.currentItem?.moveCardFocus?.("down")
+            }
+
+            DashOptionsSheet {
+                id: tabOptions
+                backdrop: contentColumn
+                tabScope: true
+                onDismissed: mainContainer.focusInitial()
+            }
+
+            DankGridEditChrome {
+                id: panelChrome
+
+                anchors.fill: parent
+                anchors.margins: -(contentInset + Theme.spacingS)
+                z: 2
+                visible: root.editMode
+                edgeResize: mainContainer.panelResizing || mainContainer.panelResizer.sideMovable(-1, mainContainer.panelColumns)
+                cornerResize: mainContainer.panelResizing || mainContainer.panelResizer.sideMovable(1, mainContainer.panelColumns)
+                removable: false
+                cornerRadius: Theme.windowRadius + Theme.spacingS
+                handleOverhang: contentInset
+                buttonSize: PopoutMetrics.chromeButtonSize
+                iconSize: PopoutMetrics.chromeIconSize
+                resizing: mainContainer.panelResizing || mainContainer.panelShifted
+                atDefault: mainContainer.panelAtDefault
+                sizeText: mainContainer.panelColumns + "×" + mainContainer.panelRows
+                onResizeStarted: (px, py, signX) => mainContainer.panelResizer.begin(px, py, signX)
+                onResizeMoved: (px, py) => mainContainer.panelResizer.move(px, py)
+                onResizeEnded: mainContainer.panelResizer.end()
+                onResizeCanceled: mainContainer.panelResizer.cancel()
+            }
+
+            Item {
+                id: contentClip
+
+                anchors.fill: parent
+                clip: mainContainer.width < Theme.px(mainContainer.implicitWidth, root.dpr) || mainContainer.height < Theme.px(mainContainer.implicitHeight, root.dpr)
+
+                Item {
+                    id: contentColumn
+
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.topMargin: DashMetrics.contentPadding
+                    anchors.leftMargin: DashMetrics.contentPadding
+                    anchors.bottomMargin: DashMetrics.contentPadding
+                    width: root.popupWidth - DashMetrics.contentPadding * 2
+                    LayoutMirroring.enabled: false
+                    LayoutMirroring.childrenInherit: true
+
+                    Item {
+                        id: headerRow
+                        visible: root.showHeader
+                        enabled: !tabOptions.shown && !pageActions.menuOpen
+
+                        x: root.verticalNavigation && root.navigationEdge === SettingsData.Right ? parent.width - width : 0
+                        y: !root.verticalNavigation && root.navigationEdge === SettingsData.Bottom ? parent.height - height : 0
+                        width: root.verticalNavigation ? Theme.navigationRailWidth : parent.width
+                        height: root.verticalNavigation ? parent.height : mainContainer.horizontalChromeHeight - DashMetrics.contentGap
+
+                        DankNavigationBar {
+                            id: tabBar
+
+                            width: parent.width
+                            height: parent.height
+                            editable: true
+                            evenlySpaced: SettingsData.dashTabsEvenlySpaced
+                            onEditRequested: root.editMode = true
+                            visible: root.showTabs && !root.editMode
+                            orientation: root.verticalNavigation ? Qt.Vertical : Qt.Horizontal
+                            currentIndex: root.currentTabIndex
+                            nextFocusTarget: pageActions.focusTargets[0] ?? pages.focusTarget
+                            previousFocusTarget: pages.currentItem?.previousFocusTarget ?? pages.focusTarget
+                            model: DashRegistry.tabBarModel
+                            onActivated: index => {
+                                const id = root.orderedTabIds[index];
+                                if (id !== undefined)
+                                    root.currentTabId = id;
+                            }
+                        }
+
+                        DashPageTitle {
+                            id: pageTitle
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width
+                            height: implicitHeight
+                            entryId: root.activeTabId
+                            visible: !root.showTabs && !root.editMode
+                            onEditRequested: root.editMode = true
+                        }
+
+                        DashPageActions {
+                            id: pageActions
+                            x: root.verticalNavigation ? 0 : (parent.width - width) / 2
+                            y: (parent.height - height) / 2
+                            width: Math.min(parent.width, implicitWidth)
+                            height: Math.min(parent.height, implicitHeight)
+                            visible: root.editMode
+                            vertical: root.verticalNavigation
+                            transientSurfaceTracker: root.transientSurfaceTracker
+                            entryId: root.activeTabId
+                            tabItem: pages.currentItem
+                            editMode: root.editMode
+                            panelResizable: true
+                            onOptionsRequested: tabOptions.presentFor(root.activeTabId)
+                            onFinished: root.editMode = false
                         }
                     }
-                }
 
-                Item {
-                    width: parent.width
-                    height: tabBar.showTabs ? Theme.spacingXS : 0
-                    visible: tabBar.showTabs
-                }
+                    DankFlickable {
+                        id: pages
+                        enabled: !tabOptions.shown && !pageActions.menuOpen
+                        showScrollBar: false
 
-                Item {
-                    id: pages
-                    width: parent.width
-                    height: implicitHeight
-                    implicitWidth: currentItem && currentItem.implicitWidth > 0 ? currentItem.implicitWidth : (700 - Theme.spacingM * 2)
-                    implicitHeight: {
-                        if (root.currentTabId === "overview")
-                            return overviewLoader.item?.implicitHeight ?? 410;
-                        if (root.currentTabId === "media")
-                            return mediaLoader.item?.implicitHeight ?? 410;
-                        if (root.currentTabId === "wallpaper")
-                            return wallpaperLoader.item?.implicitHeight ?? 410;
-                        if (root.currentTabId === "weather")
-                            return weatherLoader.item?.implicitHeight ?? 410;
-                        return 410;
-                    }
+                        property var currentHost: null
+                        property real settledHeight: DashMetrics.tabDefaultHeight
+                        readonly property var currentItem: root.activeTabId !== "" ? currentHost?.item ?? null : null
+                        readonly property Item focusTarget: root.activeTabId === "" ? emptySettings : currentHost?.focusTarget ?? null
+                        readonly property bool currentSettled: !!currentHost && (!!currentHost.item || currentHost.failed)
+                        readonly property real currentHostImplicitHeight: currentHost?.implicitHeight ?? 0
+                        readonly property real targetHeight: root.activeTabId === "" ? emptyContent.implicitHeight : currentSettled && currentHost.isCurrent ? DashMetrics.panelHeightFor(root.activeTabId, currentHostImplicitHeight) : -1
+                        readonly property real bodyHeight: root.activeTabId === "" ? emptyContent.implicitHeight : Math.max(settledHeight, currentHostImplicitHeight)
+                        readonly property bool ready: targetHeight >= 0 && settledHeight === targetHeight
+                        readonly property real availableHeight: root.screen ? root.screen.height - mainContainer.horizontalChromeHeight - DashMetrics.contentPadding * 2 - Theme.barHeight - Theme.spacingL * 2 : contentHeight
+                        readonly property int rowBudget: DashMetrics.rowCapFor(availableHeight)
 
-                    readonly property var currentItem: {
-                        if (root.currentTabId === "overview")
-                            return overviewLoader.item;
-                        if (root.currentTabId === "media")
-                            return mediaLoader.item;
-                        if (root.currentTabId === "wallpaper")
-                            return wallpaperLoader.item;
-                        if (root.currentTabId === "weather")
-                            return weatherLoader.item;
-                        return null;
-                    }
+                        x: (root.verticalNavigation && root.navigationEdge === SettingsData.Left ? root.navigationWidth : 0) - root.editGutter
+                        y: (!root.verticalNavigation && root.navigationEdge !== SettingsData.Bottom ? mainContainer.horizontalChromeHeight : 0) - root.editGutter
+                        width: parent.width - root.navigationWidth + root.editGutter * 2
+                        height: Math.max(0, mainContainer.height - mainContainer.horizontalChromeHeight - DashMetrics.contentPadding * 2) + root.editGutter * 2
+                        implicitHeight: Math.min(settledHeight, Math.max(DashMetrics.gridRowUnit, availableHeight))
+                        contentWidth: width
+                        contentHeight: bodyHeight + root.editGutter * 2
+                        clip: contentHeight > height
 
-                    Loader {
-                        id: overviewLoader
-                        anchors.fill: parent
-                        active: root.currentTabId === "overview"
-                        visible: active
-                        sourceComponent: Component {
-                            OverviewTab {
-                                onCloseDash: root.dashVisible = false
-                                onNavFocusRequested: mainContainer.forceActiveFocus()
-                                onSwitchToWeatherTab: {
-                                    if (SettingsData.weatherEnabled) {
-                                        root.requestTab("weather");
-                                    }
-                                }
-                                onSwitchToMediaTab: {
-                                    root.requestTab("media");
+                        function updateContentHeight() {
+                            if (targetHeight < 0)
+                                return;
+                            settledHeight = targetHeight;
+                        }
+
+                        onTargetHeightChanged: Qt.callLater(updateContentHeight)
+
+                        Column {
+                            id: emptyContent
+                            width: parent.width
+                            spacing: Theme.spacingM
+                            visible: root.activeTabId === ""
+
+                            CcEmptyState {
+                                iconName: "dashboard"
+                                title: I18n.tr("No tabs enabled", "Dashboard empty state when all navigation tabs are hidden")
+                            }
+
+                            DankButton {
+                                id: emptySettings
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: I18n.tr("Settings")
+                                iconName: "settings"
+                                onClicked: {
+                                    root.dashVisible = false;
+                                    root.instantClose();
+                                    PopoutService.openSettingsWithTab("dank_dash");
                                 }
                             }
                         }
-                    }
 
-                    Loader {
-                        id: mediaLoader
-                        anchors.fill: parent
-                        active: root.currentTabId === "media"
-                        visible: active
-                        asynchronous: true
-                        sourceComponent: Component {
-                            MediaPlayerTab {
-                                targetScreen: root.screen
-                                popoutX: root.alignedX
-                                popoutY: root.alignedY
-                                popoutWidth: root.alignedWidth
-                                popoutHeight: root.alignedHeight
-                                contentOffsetY: Theme.spacingM + (tabBar.showTabs ? 48 + Theme.spacingS + Theme.spacingXS : 0)
-                                section: root.triggerSection
-                                barPosition: root.effectiveBarPosition
-                                Component.onCompleted: root.__mediaTabRef = this
-                                Component.onDestruction: {
-                                    if (root.__mediaTabRef === this)
-                                        root.__mediaTabRef = null;
-                                }
-                                onShowVolumeDropdown: (pos, screen, rightEdge, player, players) => {
-                                    root.__showVolumeDropdown(pos, rightEdge, player, players);
-                                }
-                                onShowAudioDevicesDropdown: (pos, screen, rightEdge) => {
-                                    root.__showAudioDevicesDropdown(pos, rightEdge);
-                                }
-                                onShowPlayersDropdown: (pos, screen, rightEdge, player, players) => {
-                                    root.__showPlayersDropdown(pos, rightEdge, player, players);
-                                }
-                                onHideDropdowns: root.__hideDropdowns()
-                                onDropdownButtonExited: root.__startCloseTimer()
-                                onDropdownButtonEntered: root.__stopCloseTimer()
+                        Repeater {
+                            model: ScriptModel {
+                                values: DashRegistry.tabIds
                             }
-                        }
-                    }
 
-                    Loader {
-                        id: wallpaperLoader
-                        anchors.fill: parent
-                        active: root.currentTabId === "wallpaper"
-                        visible: active
-                        asynchronous: true
-                        sourceComponent: Component {
-                            WallpaperTab {
-                                active: true
-                                tabBarItem: tabBar
+                            DashTabHost {
+                                id: host
+
+                                required property string modelData
+
+                                width: pages.width
+                                height: pages.height + Math.max(0, pages.bodyHeight - pages.implicitHeight)
+                                contentPadding: root.editGutter
+                                entry: DashRegistry.entry(modelData)
+                                dashHost: root
+                                rowBudget: pages.rowBudget
                                 keyForwardTarget: mainContainer
-                                targetScreen: root.screen
-                                parentPopout: root
+                                contentViewport: pages
+                                isCurrent: root.activeTabId === modelData
+
+                                onIsCurrentChanged: {
+                                    if (isCurrent) {
+                                        pages.currentHost = host;
+                                        return;
+                                    }
+                                    if (pages.currentHost === host)
+                                        pages.currentHost = null;
+                                }
+
+                                Component.onCompleted: {
+                                    if (isCurrent)
+                                        pages.currentHost = host;
+                                }
+
+                                Component.onDestruction: {
+                                    if (pages.currentHost === host)
+                                        pages.currentHost = null;
+                                }
                             }
-                        }
-                    }
-
-                    DankSpinner {
-                        anchors.centerIn: parent
-                        size: 40
-                        visible: (wallpaperLoader.active && wallpaperLoader.status === Loader.Loading) || (mediaLoader.active && mediaLoader.status === Loader.Loading) || (weatherLoader.active && weatherLoader.status === Loader.Loading)
-                    }
-
-                    Loader {
-                        id: weatherLoader
-                        anchors.fill: parent
-                        active: root.currentTabId === "weather"
-                        visible: active
-                        asynchronous: true
-                        sourceComponent: Component {
-                            WeatherTab {}
                         }
                     }
                 }

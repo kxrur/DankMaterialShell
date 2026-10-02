@@ -18,22 +18,29 @@ Singleton {
     readonly property int expectedApiVersion: 1
     property var availablePlugins: []
     property var installedPlugins: []
+    property bool checkingPluginUpdates: false
+    property string pluginUpdateCheckError: ""
+    property double pluginUpdatesCheckedAt: 0
+    readonly property int pluginUpdatesCacheAge: 5 * 60 * 1000
+    property int pluginInventoryRevision: 0
+    property var pluginUpdateCallbacks: []
     property var registries: []
     property var availableThemes: []
     property var installedThemes: []
+    property bool installedThemesLoaded: false
     property bool isConnected: false
     readonly property bool isConnecting: requestSocket.connected && !requestSocket.linkUp
     property bool subscribeConnected: false
+    property string mprisCommandLease: ""
     property bool matugenSmartSupported: false
 
     readonly property string socketPath: Quickshell.env("DMS_SOCKET")
 
     property var pendingRequests: ({})
+    property var requestTimeouts: ({})
     property var clipboardRequestIds: ({})
     property int requestIdCounter: 0
     property bool shownOutdatedError: false
-    property string updateCommand: "dms update"
-    property bool checkingUpdateCommand: false
 
     signal pluginsListReceived(var plugins)
     signal installedPluginsReceived(var plugins)
@@ -51,6 +58,7 @@ Singleton {
     signal capabilitiesReceived
     signal credentialsRequest(var data)
     signal bluetoothPairingRequest(var data)
+    signal mprisCommandReceived(string command)
     signal brightnessStateUpdate(var data)
     signal brightnessDeviceUpdate(var device)
     signal wlrOutputStateUpdate(var data)
@@ -66,80 +74,20 @@ Singleton {
     signal locationStateUpdate(var data)
     signal sysupdateStateUpdate(var data)
     signal tailscaleStateUpdate(var data)
+    signal wellbeingStateUpdate(var data)
+    signal filesEvent(var data)
 
     property bool capsLockState: false
     property bool screensaverInhibited: false
     property var screensaverInhibitors: []
 
-    property var activeSubscriptions: ["network", "network.credentials", "loginctl", "freedesktop", "freedesktop.screensaver", "gamma", "theme.auto", "wallpaper", "bluetooth", "bluetooth.pairing", "brightness", "wlroutput", "evdev", "browser", "dbus", "clipboard", "sysupdate"]
+    property var activeSubscriptions: ["network", "network.credentials", "loginctl", "freedesktop", "freedesktop.screensaver", "gamma", "theme.auto", "wallpaper", "bluetooth", "bluetooth.pairing", "brightness", "wlroutput", "evdev", "browser", "dbus", "clipboard", "sysupdate", "files"]
     property var connectionCapabilities: null
 
     Component.onCompleted: {
         if (!socketPath || socketPath.length === 0)
             return;
-        detectUpdateCommand();
         requestSocket.connected = true;
-    }
-
-    function detectUpdateCommand() {
-        checkingUpdateCommand = true;
-        checkAurHelper.running = true;
-    }
-
-    Process {
-        id: checkAurHelper
-        command: ["sh", "-c", "command -v paru || command -v yay"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                const helper = text.trim();
-                if (helper.includes("paru")) {
-                    checkDmsPackage.helper = "paru";
-                    checkDmsPackage.running = true;
-                } else if (helper.includes("yay")) {
-                    checkDmsPackage.helper = "yay";
-                    checkDmsPackage.running = true;
-                } else {
-                    updateCommand = "dms update";
-                    checkingUpdateCommand = false;
-                }
-            }
-        }
-
-        onExited: exitCode => {
-            if (exitCode !== 0) {
-                updateCommand = "dms update";
-                checkingUpdateCommand = false;
-            }
-        }
-    }
-
-    Process {
-        id: checkDmsPackage
-        property string helper: ""
-        command: ["sh", "-c", "pacman -Qi dms-shell-git 2>/dev/null || pacman -Qi dms-shell-bin 2>/dev/null"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                if (text.includes("dms-shell-git")) {
-                    updateCommand = checkDmsPackage.helper + " -S dms-shell-git";
-                } else if (text.includes("dms-shell-bin")) {
-                    updateCommand = checkDmsPackage.helper + " -S dms-shell-bin";
-                } else {
-                    updateCommand = "dms update";
-                }
-                checkingUpdateCommand = false;
-            }
-        }
-
-        onExited: exitCode => {
-            if (exitCode !== 0) {
-                updateCommand = "dms update";
-                checkingUpdateCommand = false;
-            }
-        }
     }
 
     DankSocket {
@@ -191,6 +139,7 @@ Singleton {
 
         onConnectionStateChanged: {
             root.subscribeConnected = linkUp;
+            root.mprisCommandLease = "";
             if (!linkUp) {
                 root.connectionCapabilities = null;
                 return;
@@ -281,16 +230,15 @@ Singleton {
     }
 
     function addSubscription(service) {
-        if (activeSubscriptions.includes("all"))
+        if (activeSubscriptions.includes(service))
             return;
-        if (!activeSubscriptions.includes(service)) {
-            const newSubs = [...activeSubscriptions, service];
-            subscribe(newSubs);
-        }
+        if (activeSubscriptions.includes("all") && service !== "mpris.command")
+            return;
+        subscribe([...activeSubscriptions, service]);
     }
 
     function removeSubscription(service) {
-        if (activeSubscriptions.includes("all")) {
+        if (activeSubscriptions.includes("all") && service !== "mpris.command") {
             const allServices = ["network", "loginctl", "freedesktop", "gamma", "bluetooth", "brightness", "browser", "location"];
             const filtered = allServices.filter(s => s !== service);
             subscribe(filtered);
@@ -309,7 +257,7 @@ Singleton {
             if (response.error.includes("unknown method") && response.error.includes("subscribe")) {
                 if (!shownOutdatedError) {
                     log.error("Server does not support subscribe method");
-                    ToastService.showError(I18n.tr("DMS out of date"), I18n.tr("To update, run the following command:"), updateCommand);
+                    ToastService.showError(I18n.tr("DMS out of date"), I18n.tr("Update the dms package with your package manager, then restart the shell."));
                     shownOutdatedError = true;
                 }
             }
@@ -331,7 +279,7 @@ Singleton {
             log.info("Connected (API v" + apiVersion + ", CLI " + cliVersion + ") -", JSON.stringify(capabilities));
 
             if (apiVersion < expectedApiVersion) {
-                ToastService.showError(I18n.tr("DMS server is outdated (API v%1, expected v%2)").arg(apiVersion).arg(expectedApiVersion));
+                ToastService.showError(I18n.tr("DMS server is outdated (API v%1, expected v%2)", "error toast, %1 is current api version, %2 is required version").arg(apiVersion).arg(expectedApiVersion));
             }
 
             capabilitiesReceived();
@@ -352,6 +300,11 @@ Singleton {
             loginctlStateUpdate(data);
         } else if (service === "bluetooth.pairing") {
             bluetoothPairingRequest(data);
+        } else if (service === "mpris.command") {
+            if (data && typeof data.lease === "string")
+                mprisCommandLease = data.lease;
+            else if (data && typeof data.command === "string")
+                mprisCommandReceived(data.command);
         } else if (service === "cups") {
             cupsStateUpdate(data);
         } else if (service === "brightness") {
@@ -399,6 +352,10 @@ Singleton {
             sysupdateStateUpdate(data);
         } else if (service === "tailscale") {
             tailscaleStateUpdate(data);
+        } else if (service === "wellbeing") {
+            wellbeingStateUpdate(data);
+        } else if (service === "files") {
+            filesEvent(data);
         }
     }
 
@@ -407,7 +364,10 @@ Singleton {
         Timer {
             property var requestId
             repeat: false
-            onTriggered: root.handleResponse({id: requestId, error: "Request timed out; operation completion is uncertain"})
+            onTriggered: root.handleResponse({
+                id: requestId,
+                error: "Request timed out; operation completion is uncertain"
+            })
         }
     }
 
@@ -434,16 +394,14 @@ Singleton {
         }
 
         if (callback) {
+            pendingRequests[id] = callback;
             if (timeoutMs > 0) {
-                const timeout = requestTimeoutComponent.createObject(root, {requestId: id, interval: timeoutMs});
-                pendingRequests[id] = response => {
-                    timeout.stop();
-                    timeout.destroy();
-                    callback(response);
-                };
+                const timeout = requestTimeoutComponent.createObject(root, {
+                    requestId: id,
+                    interval: timeoutMs
+                });
+                requestTimeouts[id] = timeout;
                 timeout.start();
-            } else {
-                pendingRequests[id] = callback;
             }
         }
 
@@ -453,13 +411,24 @@ Singleton {
             log.debug("DMSService.sendRequest: Sending request id=" + id + " method=" + method);
         }
         requestSocket.send(request);
+        return id;
+    }
+
+    function cancelRequest(id) {
+        const timeout = requestTimeouts[id];
+        if (timeout) {
+            timeout.stop();
+            timeout.destroy();
+            delete requestTimeouts[id];
+        }
+        delete pendingRequests[id];
     }
 
     function handleResponse(response) {
         const callback = pendingRequests[response.id];
         if (!callback)
             return;
-        delete pendingRequests[response.id];
+        cancelRequest(response.id);
         callback(response);
     }
 
@@ -468,6 +437,7 @@ Singleton {
         pendingRequests = {};
         clipboardRequestIds = {};
         for (const id in pending) {
+            cancelRequest(id);
             pending[id]({
                 "error": "not connected to DMS socket"
             });
@@ -486,28 +456,82 @@ Singleton {
         });
     }
 
-    function listInstalled(callback) {
+    function listInstalled(callback, force = false) {
+        if (callback)
+            pluginUpdateCallbacks.push(callback);
+        if (checkingPluginUpdates)
+            return;
+        if (!force && pluginUpdatesCheckedAt > 0 && Date.now() - pluginUpdatesCheckedAt < pluginUpdatesCacheAge) {
+            finishPluginUpdateCheck({
+                result: installedPlugins
+            });
+            return;
+        }
+        checkingPluginUpdates = true;
+        pluginUpdateCheckError = "";
+        const revision = pluginInventoryRevision;
         sendRequest("plugins.listInstalled", null, response => {
-            if (response.result) {
-                installedPlugins = response.result;
-                installedPluginsReceived(response.result);
+            checkingPluginUpdates = false;
+            if (revision !== pluginInventoryRevision && dmsAvailable) {
+                listInstalled(undefined, true);
+                return;
             }
-            if (callback) {
-                callback(response);
+            if (response.error) {
+                pluginUpdateCheckError = response.error;
+                finishPluginUpdateCheck(response);
+                return;
             }
-        });
+            const previous = new Map(installedPlugins.map(plugin => [plugin.id, plugin]));
+            installedPlugins = (response.result || []).map(plugin => {
+                const known = previous.get(plugin.id);
+                if (!plugin.updateError || !known)
+                    return plugin;
+                return Object.assign({}, plugin, {
+                    hasUpdate: known.hasUpdate,
+                    diffUrl: known.diffUrl
+                });
+            });
+            pluginUpdatesCheckedAt = Date.now();
+            installedPluginsReceived(installedPlugins);
+            finishPluginUpdateCheck({
+                result: installedPlugins
+            });
+        }, 120000);
+    }
+
+    function finishPluginUpdateCheck(response) {
+        const callbacks = pluginUpdateCallbacks;
+        pluginUpdateCallbacks = [];
+        for (const callback of callbacks)
+            callback(response);
+    }
+
+    function pluginOperationFinished(pluginName, removed) {
+        pluginInventoryRevision++;
+        pluginUpdatesCheckedAt = 0;
+        if (removed) {
+            installedPlugins = installedPlugins.filter(plugin => plugin.id !== pluginName);
+        } else {
+            const known = installedPlugins.find(plugin => plugin.id === pluginName) || availablePlugins.find(plugin => plugin.id === pluginName);
+            if (known)
+                installedPlugins = installedPlugins.filter(plugin => plugin.id !== pluginName).concat([Object.assign({}, known, {
+                        hasUpdate: false,
+                        updateError: ""
+                    })]);
+        }
+        installedPluginsReceived(installedPlugins);
     }
 
     function install(pluginName, callback) {
         sendRequest("plugins.install", {
             "name": pluginName
         }, response => {
-            if (callback) {
+            if (!response.error)
+                pluginOperationFinished(pluginName, false);
+            if (callback)
                 callback(response);
-            }
-            if (!response.error) {
+            if (!response.error)
                 listInstalled();
-            }
         });
     }
 
@@ -515,12 +539,12 @@ Singleton {
         sendRequest("plugins.uninstall", {
             "name": pluginName
         }, response => {
-            if (callback) {
+            if (!response.error)
+                pluginOperationFinished(pluginName, true);
+            if (callback)
                 callback(response);
-            }
-            if (!response.error) {
+            if (!response.error)
                 listInstalled();
-            }
         });
     }
 
@@ -528,12 +552,12 @@ Singleton {
         sendRequest("plugins.update", {
             "name": pluginName
         }, response => {
-            if (callback) {
+            if (!response.error)
+                pluginOperationFinished(pluginName, false);
+            if (callback)
                 callback(response);
-            }
-            if (!response.error) {
+            if (!response.error)
                 listInstalled();
-            }
         });
     }
 
@@ -591,6 +615,7 @@ Singleton {
         sendRequest("themes.listInstalled", null, response => {
             if (response.result) {
                 installedThemes = response.result;
+                installedThemesLoaded = true;
                 installedThemesReceived(response.result);
             }
             if (callback) {
@@ -758,9 +783,10 @@ Singleton {
         sendRequest("sysupdate.getState", null, callback);
     }
 
-    function sysupdateRefresh(force, callback) {
+    function sysupdateRefresh(force, callback, background) {
         sendRequest("sysupdate.refresh", {
-            "force": force === true
+            "force": force === true,
+            "background": background === true
         }, callback);
     }
 
@@ -785,5 +811,15 @@ Singleton {
 
     function sysupdateRelease(callback) {
         sendRequest("sysupdate.release", null, callback);
+    }
+
+    function notifySend(params, callback) {
+        sendRequest("notify.send", params, callback);
+    }
+
+    function sysupdateReleases(force, callback) {
+        sendRequest("sysupdate.releases", {
+            "force": force === true
+        }, callback);
     }
 }

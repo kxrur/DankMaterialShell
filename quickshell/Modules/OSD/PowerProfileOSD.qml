@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell.Services.UPower
 import qs.Common
 import qs.Services
 import qs.Widgets
@@ -7,11 +6,13 @@ import qs.Widgets
 DankOSD {
     id: root
 
+    osdKind: "powerProfile"
+
     property int currentProfile: 0
     property string profileIcon: "settings"
 
-    osdWidth: Theme.iconSize + Theme.spacingS * 2
-    osdHeight: Theme.iconSize + Theme.spacingS * 2
+    osdWidth: Theme.osdHeight
+    osdHeight: Theme.osdHeight
     autoHideInterval: 2000
     enableMouseInteraction: false
 
@@ -34,10 +35,12 @@ DankOSD {
         }
     }
 
-    content: DankIcon {
-        anchors.centerIn: parent
-        name: root.profileIcon
-        size: Theme.iconSize
-        color: Theme.primary
+    content: Item {
+        OsdIcon {
+            tonal: false
+            anchors.centerIn: parent
+            iconName: root.profileIcon
+            iconColor: Theme.primary
+        }
     }
 }
