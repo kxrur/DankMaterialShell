@@ -1004,7 +1004,7 @@ Item {
                 return;
 
             const delta = wheel.angleDelta.y;
-            const isTouchpad = wheel.pixelDelta && wheel.pixelDelta.y !== 0;
+            const isTouchpad = wheel.pixelDelta && wheel.pixelDelta.y !== 0 && wheel.angleDelta.y === 0;
             const reverse = SettingsData.reverseScrolling ? -1 : 1;
 
             if (isTouchpad) {
